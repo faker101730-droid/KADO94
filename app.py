@@ -6,35 +6,27 @@ import streamlit as st
 import plotly.graph_objects as go
 st.set_page_config(page_title="KADO94", layout="wide")
 
-# 日付 → 月初
-def to_month_start(d: date) -> pd.Timestamp:
-    ts = pd.to_datetime(d)
-    return pd.Timestamp(year=ts.year, month=ts.month, day=1)
-
-def days_in_month(month_start: pd.Timestamp) -> int:
-    return int((month_start + pd.offsets.MonthEnd(0)).day)
-
-
 # -----------------------------
 # -----------------------------
 # 入力：数字だけ打てばOK → 自動でカンマ整形（例: 1039071652 → 1,039,071,652）
 #
 # Streamlitのnumber_inputは入力欄にカンマ表示ができないため、text_inputで実現します。
-# ただし、text_inputの「自分自身の値」をコールバック内で書き換えると反映されない環境があるため、
-# **ウィジェットkeyを世代管理して描画し直す**方式で、確実に入力欄をカンマ表示へ更新します。
+# 「入力確定（Enter / フォーカス外し）」のタイミングで、入力欄そのものをカンマ表記に更新します。
 # -----------------------------
 def _clean_num_text(s: str) -> str:
     return (s or "").replace(",", "").replace(" ", "").replace("　", "").replace("_", "")
 
 def _rerun():
-    # Streamlitのバージョン差分吸収
     try:
         st.rerun()
     except Exception:
-        st.experimental_rerun()
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
 
 def int_input_comma(label: str, key: str, default: int = 0, help: str | None = None) -> int:
-    """整数入力（数字だけでOK）。確定後に入力欄をカンマ整形して表示する。"""
+    """整数入力（数字だけでOK）→ 確定後に入力欄をカンマ整形して表示する。"""
     fmt_key = f"{key}__fmt"
     num_key = f"{key}__num"
     rev_key = f"{key}__rev"
@@ -49,7 +41,7 @@ def int_input_comma(label: str, key: str, default: int = 0, help: str | None = N
         label,
         value=st.session_state[fmt_key],
         key=widget_key,
-        help=help or "数字だけ入力でOK（例: 1039071652）",
+        help=help or "数字だけ入力でOK（カンマ不要）。例: 1039071652",
     )
 
     cleaned = _clean_num_text(txt)
@@ -64,7 +56,6 @@ def int_input_comma(label: str, key: str, default: int = 0, help: str | None = N
         num = sign * int(num_part)
 
     formatted = f"{num:,}"
-    # 表示用テキストが変わったら、ウィジェットを世代交代して再描画（入力欄にカンマ反映）
     if formatted != st.session_state[fmt_key]:
         st.session_state[fmt_key] = formatted
         st.session_state[num_key] = num
@@ -75,7 +66,7 @@ def int_input_comma(label: str, key: str, default: int = 0, help: str | None = N
     return num
 
 def float_input_comma(label: str, key: str, default: float = 0.0, digits: int = 2, help: str | None = None) -> float:
-    """小数入力（数字だけでOK）。確定後に入力欄をカンマ整形して表示する。"""
+    """小数入力（数字だけでOK）→ 確定後にカンマ整形して表示する。"""
     fmt_key = f"{key}__fmt"
     num_key = f"{key}__num"
     rev_key = f"{key}__rev"
@@ -90,7 +81,7 @@ def float_input_comma(label: str, key: str, default: float = 0.0, digits: int = 
         label,
         value=st.session_state[fmt_key],
         key=widget_key,
-        help=help or "数字だけ入力でOK（例: 85911.25）",
+        help=help or "数字だけ入力でOK（カンマ不要）。例: 85911.25",
     )
 
     cleaned = _clean_num_text(txt)
@@ -113,6 +104,50 @@ def float_input_comma(label: str, key: str, default: float = 0.0, digits: int = 
     st.session_state[num_key] = num
     return num
 
+
+
+def to_month_start(d: date) -> pd.Timestamp:
+    ts = pd.to_datetime(d)
+    return pd.Timestamp(year=ts.year, month=ts.month, day=1)
+
+def days_in_month(month_start: pd.Timestamp) -> int:
+    return int((month_start + pd.offsets.MonthEnd(0)).day)
+
+def excel_round0(x: float) -> int:
+    """Excelの0桁丸め（四捨五入：0.5は切り上げ）に寄せる"""
+    if x is None:
+        return 0
+    try:
+        xf = float(x)
+    except Exception:
+        return 0
+    if math.isnan(xf):
+        return 0
+    if xf >= 0:
+        return int(math.floor(xf + 0.5))
+    return -int(math.floor(abs(xf) + 0.5))
+
+def fmt_int_excel(x) -> str:
+    try:
+        return f"{excel_round0(float(x)):,}"
+    except Exception:
+        return str(x)
+
+def yen(x):
+    if x is None or (isinstance(x, float) and (pd.isna(x))):
+        return ""
+    try:
+        return f"¥{excel_round0(float(x)):,}"
+    except Exception:
+        return str(x)
+
+
+
+def month_label(ts: pd.Timestamp) -> str:
+    try:
+        return ts.strftime('%Y-%m')
+    except Exception:
+        return str(ts)
 
 
 def _chart_settings(size: str):
@@ -324,7 +359,7 @@ with tab_sim:
     with colL:
         month = st.date_input("年月（その月のどの日でもOK）", value=date.today().replace(day=1))
         month_start = to_month_start(month)
-        beds = st.number_input("稼働病床数", min_value=0.0, value=401.0, step=1.0)
+        beds = int_input_comma("稼働病床数", key="beds", default=401)
         los = st.number_input("平均在院日数", min_value=0.1, value=10.4, step=0.1)
 
 
@@ -339,10 +374,10 @@ with tab_sim:
             st.markdown("##### 目標の設定")
             target_mode = st.radio("目標の指定方法", ["稼働率", "新入院数", "入院収入"], horizontal=True)
             if target_mode == "新入院数":
-                target_admissions = st.number_input("新入院数（目標）", min_value=0.0, value=900.0, step=1.0)
-                st.caption(f"入力値: {target_admissions:,.0f} 人")
+                target_admissions = int_input_comma("新入院数（目標）", key="target_admissions", default=900)
+                st.caption(f"入力値: {target_admissions:,} 人")
             elif target_mode == "入院収入":
-                target_revenue = st.number_input("入院収入（目標・円）", min_value=0.0, value=1_000_000_000.0, step=1_000_000.0)
+                target_revenue = int_input_comma("入院収入（目標・円）", key="target_revenue", default=1000000000)
                 st.caption(f"入力値: {yen(target_revenue)}")
             else:
                 st.caption(f"入力値: 目標稼働率 {(target_occ*100):.1f}%")
@@ -353,20 +388,20 @@ with tab_sim:
 
         if input_mode == "実績と比較（増収額まで）":
             st.markdown("##### 実績（比較する場合は入力）")
-            patient_days_actual = st.number_input("延べ患者数（実績・人日）", min_value=0.0, value=10136.0, step=1.0)
-            st.caption(f"入力値: {patient_days_actual:,.0f} 人日")
-            admissions_actual = st.number_input("新入院数（実績）", min_value=0.0, value=916.0, step=1.0)
-            st.caption(f"入力値: {admissions_actual:,.0f} 人")
-            revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=870_000_000.0, step=1_000_000.0)
+            patient_days_actual = int_input_comma("延べ患者数（実績・人日）", key="patient_days_actual", default=10136)
+            st.caption(f"入力値: {patient_days_actual:,} 人日")
+            admissions_actual = int_input_comma("新入院数（実績）", key="admissions_actual", default=916)
+            st.caption(f"入力値: {admissions_actual:,} 人")
+            revenue_actual = int_input_comma("入院収入（実績・円）", key="revenue_actual", default=870000000)
             st.caption(f"入力値: {yen(revenue_actual)}")
 
         else:
             with st.expander("実績を入力して増収額も見たい（任意）"):
-                patient_days_actual = st.number_input("延べ患者数（実績・人日）", min_value=0.0, value=0.0, step=1.0)
-                st.caption(f"入力値: {patient_days_actual:,.0f} 人日")
-                admissions_actual = st.number_input("新入院数（実績）", min_value=0.0, value=0.0, step=1.0)
-                st.caption(f"入力値: {admissions_actual:,.0f} 人")
-                revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=0.0, step=1_000_000.0)
+                patient_days_actual = int_input_comma("延べ患者数（実績・人日）", key="patient_days_actual", default=10136)
+                st.caption(f"入力値: {patient_days_actual:,} 人日")
+                admissions_actual = int_input_comma("新入院数（実績）", key="admissions_actual", default=916)
+                st.caption(f"入力値: {admissions_actual:,} 人")
+                revenue_actual = int_input_comma("入院収入（実績・円）", key="revenue_actual", default=870000000)
                 st.caption(f"入力値: {yen(revenue_actual)}")
 
                 # 未入力（0扱い）をNoneに変換：比較表示を抑制
@@ -550,14 +585,14 @@ with tab_fc:
     with colL:
         month = st.date_input("年月（その月のどの日でもOK）", value=date.today().replace(day=1), key="fc_month")
         month_start = to_month_start(month)
-        beds = st.number_input("稼働病床数", min_value=0.0, value=401.0, step=1.0, key="fc_beds")
+        beds = int_input_comma("稼働病床数", key="beds", default=401)
         patient_days_actual = st.number_input("延べ患者数（人日）", min_value=0.0, value=10297.0, step=1.0, key="fc_pd")
         admissions_actual = st.number_input("新入院数", min_value=0.0, value=985.0, step=1.0, key="fc_adm")
         los = st.number_input("平均在院日数", min_value=0.1, value=10.5, step=0.1, key="fc_los")
 
     with colR:
         st.markdown("#### コスト前提")
-        revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=891_168_000.0, step=1_000_000.0, key="fc_rev")
+        revenue_actual = int_input_comma("入院収入（実績・円）", key="revenue_actual", default=870000000)
         auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True, key="fc_auto_unit")
         if auto_unit:
             unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
