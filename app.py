@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-import altair as alt
+import plotly.graph_objects as go
 st.set_page_config(page_title="KADO94", layout="wide")
 
 # -------------------------
@@ -40,10 +40,40 @@ def simulate_month(
     los: float,
     revenue_actual: float,
     unit_price: float,  # 入院単価（円/人日）
+    calc_mode: str = '高精度',
 ):
     d = days_in_month(month_start)
     max_patient_days = beds * d
     required_patient_days = max_patient_days * target_occ
+
+
+def apply_rounding(mode: str, **vals):
+    """
+    mode:
+      - "高精度": 途中の丸めなし（理論値に近い）
+      - "Excel互換": 途中計算を円・人日単位で丸め（Excelの表示結果に合わせやすい）
+    """
+    if mode != "Excel互換":
+        return vals
+
+    out = dict(vals)
+
+    def r0(x):
+        try:
+            return float(round(float(x)))
+        except Exception:
+            return x
+
+    # 円（収入・単価）は1円単位、人日は1人日単位で丸め
+    for k in ["unit_price", "revenue_actual", "revenue_target", "delta_revenue"]:
+        if k in out and out[k] is not None:
+            out[k] = r0(out[k])
+
+    for k in ["required_patient_days_target", "max_patient_days_100", "add_patient_days", "patient_days_actual"]:
+        if k in out and out[k] is not None:
+            out[k] = r0(out[k])
+
+    return out
 
     occ_actual = (patient_days_actual / max_patient_days) if max_patient_days else 0.0
     revenue_target = required_patient_days * unit_price
@@ -53,18 +83,30 @@ def simulate_month(
     add_admissions = math.ceil(add_patient_days / los) if los and los > 0 else 0
     required_admissions = admissions_actual + add_admissions
 
+    rounded = apply_rounding(
+        calc_mode,
+        unit_price=unit_price,
+        revenue_actual=revenue_actual,
+        revenue_target=revenue_target,
+        delta_revenue=delta_revenue,
+        max_patient_days_100=max_patient_days,
+        required_patient_days_target=required_patient_days,
+        add_patient_days=add_patient_days,
+        patient_days_actual=patient_days_actual,
+    )
+
     return {
         "month_start": month_start,
         "month_days": d,
-        "max_patient_days_100": max_patient_days,
-        "required_patient_days_target": required_patient_days,
+        "max_patient_days_100": rounded["max_patient_days_100"],
+        "required_patient_days_target": rounded["required_patient_days_target"],
         "occ_actual": occ_actual,
-        "revenue_target": revenue_target,
-        "delta_revenue": delta_revenue,
-        "add_patient_days": add_patient_days,
+        "revenue_target": rounded["revenue_target"],
+        "delta_revenue": rounded["delta_revenue"],
+        "add_patient_days": rounded["add_patient_days"],
         "add_admissions": add_admissions,
         "required_admissions": required_admissions,
-        "unit_price": unit_price,
+        "unit_price": rounded["unit_price"],
     }
 
 def read_monthly_table(uploaded_file):
@@ -117,6 +159,7 @@ st.caption("稼働率94%：入院収入シミュレーション & 固定費カ�
 
 with st.sidebar:
     st.subheader("共通設定")
+    calc_mode = st.radio("計算モード", ["高精度", "Excel互換"], index=0, horizontal=True)
     target_occ = st.slider("目標稼働率", min_value=0.50, max_value=1.00, value=0.94, step=0.01)
     st.caption("※ Excelの計算ロジックをPythonに移植して計算します（Excel計算エンジンは使いません）。")
 
@@ -143,6 +186,8 @@ with tab_sim:
         auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True)
         if auto_unit:
             unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
+            if calc_mode == 'Excel互換':
+                unit_price = round(unit_price)
             st.info(f"入院単価（自動）: {yen(unit_price)} / 人日")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=85_911.0, step=100.0)
@@ -156,6 +201,7 @@ with tab_sim:
             los=los,
             revenue_actual=revenue_actual,
             unit_price=unit_price,
+            calc_mode=calc_mode,
         )
 
     st.divider()
@@ -174,40 +220,54 @@ with tab_sim:
 
     st.markdown("#### グラフ（実績 vs 目標）")
 
-    # 稼働率：実績バー＋目標ライン
-    df_occ = pd.DataFrame({"項目": ["稼働率"], "実績": [result["occ_actual"]], "目標": [target_occ]})
-    occ_base = alt.Chart(df_occ).encode(y=alt.Y("項目:N", title=None))
-    occ_bar = occ_base.mark_bar().encode(
-        x=alt.X("実績:Q", axis=alt.Axis(format=".0%"), title="稼働率"),
-        tooltip=[alt.Tooltip("実績:Q", format=".1%"), alt.Tooltip("目標:Q", format=".1%")],
+    # 稼働率：バレット（実績バー）＋目標ライン
+    fig_occ = go.Figure()
+    fig_occ.add_trace(go.Indicator(
+        mode="number+gauge",
+        value=float(result["occ_actual"] * 100),
+        number={"suffix": "%", "font": {"size": 34}},
+        title={"text": "稼働率（実績）"},
+        gauge={
+            "shape": "bullet",
+            "axis": {"range": [0, 100]},
+            "threshold": {"line": {"width": 4}, "value": float(target_occ * 100)},
+            "bar": {"thickness": 0.35},
+        },
+        domain={"x": [0, 1], "y": [0, 1]},
+    ))
+    fig_occ.update_layout(height=120, margin=dict(l=10, r=10, t=35, b=10))
+    st.plotly_chart(fig_occ, use_container_width=True)
+
+    # 入院収入：実績 vs 目標（数値ラベル）
+    fig_rev = go.Figure()
+    fig_rev.add_trace(go.Bar(
+        x=["実績", "目標"],
+        y=[float(revenue_actual), float(result["revenue_target"])],
+        text=[yen(revenue_actual), yen(result["revenue_target"])],
+        textposition="outside",
+        cliponaxis=False,
+    ))
+    fig_rev.update_layout(
+        height=300,
+        yaxis_title="入院収入（円）",
+        margin=dict(l=10, r=10, t=20, b=10),
     )
-    occ_rule = occ_base.mark_rule().encode(
-        x="目標:Q",
-        tooltip=[alt.Tooltip("目標:Q", format=".1%")],
-    )
-    st.altair_chart((occ_bar + occ_rule).properties(height=90), use_container_width=True)
+    st.plotly_chart(fig_rev, use_container_width=True)
 
-    # 入院収入：実績 / 目標
-    df_rev = pd.DataFrame({"区分": ["実績", "目標"], "入院収入": [revenue_actual, result["revenue_target"]]})
-    rev_chart = alt.Chart(df_rev).mark_bar().encode(
-        x=alt.X("区分:N", title=None),
-        y=alt.Y("入院収入:Q", title="入院収入（円）"),
-        tooltip=[alt.Tooltip("区分:N"), alt.Tooltip("入院収入:Q", format=",.0f")],
-    ).properties(height=260)
-    st.altair_chart(rev_chart, use_container_width=True)
+    # 追加必要量：横棒（ラベル付き）
+    fig_need = go.Figure()
+    fig_need.add_trace(go.Bar(
+        y=["追加必要延べ患者数（人日）", "追加必要新入院（推計）"],
+        x=[float(result["add_patient_days"]), float(result["add_admissions"])],
+        orientation="h",
+        text=[f"{result['add_patient_days']:,.0f}", f"{result['add_admissions']:,.0f}"],
+        textposition="outside",
+        cliponaxis=False,
+    ))
+    fig_need.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig_need, use_container_width=True)
 
-    # 追加必要量
-    df_need = pd.DataFrame({
-        "項目": ["追加必要延べ患者数（人日）", "追加必要新入院（推計）"],
-        "値": [result["add_patient_days"], result["add_admissions"]],
-    })
-    need_chart = alt.Chart(df_need).mark_bar().encode(
-        y=alt.Y("項目:N", sort=None, title=None),
-        x=alt.X("値:Q", title=None),
-        tooltip=[alt.Tooltip("項目:N"), alt.Tooltip("値:Q", format=",.0f")],
-    ).properties(height=140)
-    st.altair_chart(need_chart, use_container_width=True)
-
+    st.markdown("#### 計算内訳")
     st.markdown("#### 計算内訳")
     detail = pd.DataFrame(
         [
@@ -253,6 +313,8 @@ with tab_fc:
         auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True, key="fc_auto_unit")
         if auto_unit:
             unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
+            if calc_mode == 'Excel互換':
+                unit_price = round(unit_price)
             st.info(f"入院単価（自動）: {yen(unit_price)} / 人日")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=86_546.0, step=100.0, key="fc_unit_price")
@@ -270,6 +332,7 @@ with tab_fc:
             los=los,
             revenue_actual=revenue_actual,
             unit_price=unit_price,
+            calc_mode=calc_mode,
         )
 
         # Fixed-cost coverage
@@ -343,69 +406,98 @@ with tab_fc:
 
                 st.markdown("#### 月次推移（期間内）")
 
-                occ_line = alt.Chart(dff).mark_line().encode(
-                    x=alt.X("月:N", title=None),
-                    y=alt.Y("実績稼働率:Q", axis=alt.Axis(format=".0%"), title="稼働率"),
-                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("実績稼働率:Q", format=".1%")],
-                )
-                occ_target = alt.Chart(dff).mark_line(strokeDash=[4,4]).encode(
-                    x="月:N",
-                    y=alt.Y("目標稼働率:Q", axis=alt.Axis(format=".0%")),
-                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("目標稼働率:Q", format=".1%")],
-                )
-                st.altair_chart((occ_line + occ_target).properties(height=260), use_container_width=True)
+                dff = dff.sort_values("年月").copy()
+                x_month = dff["月"].tolist()
 
-                rev_line = alt.Chart(
-                    dff.melt(id_vars=["月"], value_vars=["入院収入（実績）", "入院収入（目標稼働率）"], var_name="区分", value_name="入院収入")
-                ).mark_line().encode(
-                    x=alt.X("月:N", title=None),
-                    y=alt.Y("入院収入:Q", title="入院収入（円）"),
-                    color="区分:N",
-                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("区分:N"), alt.Tooltip("入院収入:Q", format=",.0f")],
-                ).properties(height=260)
-                st.altair_chart(rev_line, use_container_width=True)
+                # 稼働率（実績 vs 目標）
+                fig_occ_m = go.Figure()
+                fig_occ_m.add_trace(go.Scatter(
+                    x=x_month, y=(dff["実績稼働率"] * 100),
+                    mode="lines+markers",
+                    name="稼働率（実績）",
+                    hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
+                ))
+                fig_occ_m.add_trace(go.Scatter(
+                    x=x_month, y=(dff["目標稼働率"] * 100),
+                    mode="lines",
+                    name="稼働率（目標）",
+                    line=dict(dash="dash"),
+                    hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
+                ))
+                fig_occ_m.update_layout(
+                    height=300,
+                    yaxis_title="稼働率（%）",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_occ_m, use_container_width=True)
 
-                delta_bar = alt.Chart(dff).mark_bar().encode(
-                    x=alt.X("月:N", title=None),
-                    y=alt.Y("増収額（目標−実績）:Q", title="増収額（円）"),
-                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("増収額（目標−実績）:Q", format=",.0f")],
-                ).properties(height=220)
-                st.altair_chart(delta_bar, use_container_width=True)
+                # 入院収入（実績 vs 目標）
+                fig_rev_m = go.Figure()
+                fig_rev_m.add_trace(go.Scatter(
+                    x=x_month, y=dff["入院収入（実績）"],
+                    mode="lines+markers",
+                    name="入院収入（実績）",
+                    hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
+                ))
+                fig_rev_m.add_trace(go.Scatter(
+                    x=x_month, y=dff["入院収入（目標稼働率）"],
+                    mode="lines+markers",
+                    name="入院収入（目標）",
+                    line=dict(dash="dash"),
+                    hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
+                ))
+                fig_rev_m.update_layout(
+                    height=320,
+                    yaxis_title="入院収入（円）",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_rev_m, use_container_width=True)
+
+                # 増収額（棒）
+                fig_delta = go.Figure()
+                fig_delta.add_trace(go.Bar(
+                    x=x_month,
+                    y=dff["増収額（目標−実績）"],
+                    text=[f"¥{v:,.0f}" for v in dff["増収額（目標−実績）"]],
+                    textposition="outside",
+                    cliponaxis=False,
+                    hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
+                ))
+                fig_delta.update_layout(
+                    height=300,
+                    yaxis_title="増収額（円）",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_delta, use_container_width=True)
 
                 # 固定費カバー率（月次）
                 if fixed_cost_month and fixed_cost_month > 0:
-                    dff["限界利益（実績）"] = dff["入院収入（実績）"] * (1 - var_cost_rate)
-                    dff["限界利益（目標）"] = dff["入院収入（目標稼働率）"] * (1 - var_cost_rate)
-                    dff["固定費カバー率（実績）"] = dff["限界利益（実績）"] / fixed_cost_month
-                    dff["固定費カバー率（目標）"] = dff["限界利益（目標）"] / fixed_cost_month
+                    fig_cov = go.Figure()
+                    fig_cov.add_trace(go.Scatter(
+                        x=x_month, y=dff["固定費カバー率（実績）"],
+                        mode="lines+markers",
+                        name="固定費カバー率（実績）",
+                        hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
+                    ))
+                    fig_cov.add_trace(go.Scatter(
+                        x=x_month, y=dff["固定費カバー率（目標）"],
+                        mode="lines+markers",
+                        name="固定費カバー率（目標）",
+                        line=dict(dash="dash"),
+                        hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
+                    ))
+                    fig_cov.update_layout(
+                        height=300,
+                        yaxis_title="固定費カバー率（倍）",
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    st.plotly_chart(fig_cov, use_container_width=True)
 
-                    cov_line = alt.Chart(
-                        dff.melt(id_vars=["月"], value_vars=["固定費カバー率（実績）", "固定費カバー率（目標）"], var_name="区分", value_name="固定費カバー率")
-                    ).mark_line().encode(
-                        x=alt.X("月:N", title=None),
-                        y=alt.Y("固定費カバー率:Q", title="固定費カバー率（倍）"),
-                        color="区分:N",
-                        tooltip=[alt.Tooltip("月:N"), alt.Tooltip("区分:N"), alt.Tooltip("固定費カバー率:Q", format=".2f")],
-                    ).properties(height=260)
-                    st.altair_chart(cov_line, use_container_width=True)
 
-
-                # Period aggregates
-                pd_actual = dff["延べ患者数（人日）"].sum()
-                rev_actual = dff["入院収入（実績）"].sum()
-                unit_price_period = (rev_actual / pd_actual) if pd_actual else 0.0
-
-                max_pd = dff["最大延べ患者数（100%）"].sum()
-                req_pd = max_pd * target_occ
-
-                rev_target = req_pd * unit_price_period
-                margin_period_actual = rev_actual * (1 - var_cost_rate)
-                margin_period_target = rev_target * (1 - var_cost_rate)
-
-                fixed_cost_period = fixed_cost_month * months
-                cov_period_actual = (margin_period_actual / fixed_cost_period) if fixed_cost_period else None
-                cov_period_target = (margin_period_target / fixed_cost_period) if fixed_cost_period else None
-
+                s1, s2, s3, s4 = st.columns(4)
                 s1, s2, s3, s4 = st.columns(4)
                 s1.metric("月数", f"{months} ヶ月")
                 s2.metric("期間延べ患者数（実績）", f"{pd_actual:,.0f} 人日")
