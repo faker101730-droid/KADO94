@@ -173,8 +173,6 @@ with tab_sim:
         auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True)
         if auto_unit:
             unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
-            if calc_mode == 'Excel互換':
-                unit_price = round(unit_price)
             st.info(f"入院単価（自動）: {yen(unit_price)} / 人日")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=85_911.0, step=100.0)
@@ -211,17 +209,17 @@ with tab_sim:
     fig_occ.add_trace(go.Indicator(
         mode="number+gauge",
         value=float(result["occ_actual"] * 100),
-        number={"suffix": "%", "font": {"size": 34}},
+        number={"suffix": "%", "font": {"size": 26}},
         title={"text": "稼働率（実績）"},
         gauge={
             "shape": "bullet",
             "axis": {"range": [0, 100]},
             "threshold": {"line": {"width": 4}, "value": float(target_occ * 100)},
-            "bar": {"thickness": 0.35},
+            "bar": {"thickness": 0.18},
         },
         domain={"x": [0, 1], "y": [0, 1]},
     ))
-    fig_occ.update_layout(height=120, margin=dict(l=10, r=10, t=35, b=10))
+    fig_occ.update_layout(template="plotly_dark", height=110, margin=dict(l=10, r=10, t=35, b=10))
     st.plotly_chart(fig_occ, use_container_width=True)
 
     # 入院収入：実績 vs 目標（数値ラベル）
@@ -232,9 +230,11 @@ with tab_sim:
         text=[yen(revenue_actual), yen(result["revenue_target"])],
         textposition="outside",
         cliponaxis=False,
+        width=[0.35, 0.35],
     ))
     fig_rev.update_layout(
-        height=300,
+        template="plotly_dark",
+        height=260,
         yaxis_title="入院収入（円）",
         margin=dict(l=10, r=10, t=20, b=10),
     )
@@ -250,10 +250,9 @@ with tab_sim:
         textposition="outside",
         cliponaxis=False,
     ))
-    fig_need.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10))
+    fig_need.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig_need, use_container_width=True)
 
-    st.markdown("#### 計算内訳")
     st.markdown("#### 計算内訳")
     detail = pd.DataFrame(
         [
@@ -299,8 +298,6 @@ with tab_fc:
         auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True, key="fc_auto_unit")
         if auto_unit:
             unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
-            if calc_mode == 'Excel互換':
-                unit_price = round(unit_price)
             st.info(f"入院単価（自動）: {yen(unit_price)} / 人日")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=86_546.0, step=100.0, key="fc_unit_price")
@@ -400,17 +397,20 @@ with tab_fc:
                     x=x_month, y=(dff["実績稼働率"] * 100),
                     mode="lines+markers",
                     name="稼働率（実績）",
+                    line=dict(width=2),
+                    marker=dict(size=6),
                     hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
                 ))
                 fig_occ_m.add_trace(go.Scatter(
                     x=x_month, y=(dff["目標稼働率"] * 100),
                     mode="lines",
                     name="稼働率（目標）",
-                    line=dict(dash="dash"),
+                    line=dict(dash="dash", width=2),
                     hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
                 ))
                 fig_occ_m.update_layout(
-                    height=300,
+                    template="plotly_dark",
+                    height=280,
                     yaxis_title="稼働率（%）",
                     margin=dict(l=10, r=10, t=10, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -423,17 +423,21 @@ with tab_fc:
                     x=x_month, y=dff["入院収入（実績）"],
                     mode="lines+markers",
                     name="入院収入（実績）",
+                    line=dict(width=2),
+                    marker=dict(size=6),
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
                 fig_rev_m.add_trace(go.Scatter(
                     x=x_month, y=dff["入院収入（目標稼働率）"],
                     mode="lines+markers",
                     name="入院収入（目標）",
-                    line=dict(dash="dash"),
+                    line=dict(dash="dash", width=2),
+                    marker=dict(size=6),
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
                 fig_rev_m.update_layout(
-                    height=320,
+                    template="plotly_dark",
+                    height=300,
                     yaxis_title="入院収入（円）",
                     margin=dict(l=10, r=10, t=10, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -451,7 +455,8 @@ with tab_fc:
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
                 fig_delta.update_layout(
-                    height=300,
+                    template="plotly_dark",
+                    height=280,
                     yaxis_title="増収額（円）",
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
@@ -464,17 +469,21 @@ with tab_fc:
                         x=x_month, y=dff["固定費カバー率（実績）"],
                         mode="lines+markers",
                         name="固定費カバー率（実績）",
+                        line=dict(width=2),
+                        marker=dict(size=6),
                         hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
                     ))
                     fig_cov.add_trace(go.Scatter(
                         x=x_month, y=dff["固定費カバー率（目標）"],
                         mode="lines+markers",
                         name="固定費カバー率（目標）",
-                        line=dict(dash="dash"),
+                        line=dict(dash="dash", width=2),
+                        marker=dict(size=6),
                         hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
                     ))
                     fig_cov.update_layout(
-                        height=300,
+                        template="plotly_dark",
+                        height=280,
                         yaxis_title="固定費カバー率（倍）",
                         margin=dict(l=10, r=10, t=10, b=10),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
