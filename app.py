@@ -6,6 +6,15 @@ import streamlit as st
 import plotly.graph_objects as go
 st.set_page_config(page_title="KADO94", layout="wide")
 
+# 日付 → 月初
+def to_month_start(d: date) -> pd.Timestamp:
+    ts = pd.to_datetime(d)
+    return pd.Timestamp(year=ts.year, month=ts.month, day=1)
+
+def days_in_month(month_start: pd.Timestamp) -> int:
+    return int((month_start + pd.offsets.MonthEnd(0)).day)
+
+
 # -----------------------------
 # -----------------------------
 # 入力：数字だけ打てばOK → 自動でカンマ整形（例: 1039071652 → 1,039,071,652）
