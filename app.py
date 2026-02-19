@@ -7,53 +7,84 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="KADO94", layout="wide")
 
 # -----------------------------
-# 入力：カンマ付きテキスト入力（例: 1,234,567）
+# 入力：数字だけ打てばOK → 自動でカンマ整形（例: 1039071652 → 1,039,071,652）
+# ※Streamlitのnumber_inputは入力欄にカンマ表示できないため、text_inputで実現しています。
 # -----------------------------
 def _clean_num_text(s: str) -> str:
     return (s or "").replace(",", "").replace(" ", "").replace("　", "").replace("_", "")
 
-def int_input_comma(label: str, key: str, default: int = 0, help: str | None = None) -> int:
-    """整数入力（カンマOK）。入力欄自体がカンマ表記になる。"""
-    text_key = f"{key}__text"
-    num_key = f"{key}__num"
+def _format_int_text(text_key: str, default: int = 0):
+    txt = st.session_state.get(text_key, "")
+    cleaned = _clean_num_text(txt)
+    if cleaned == "":
+        st.session_state[text_key] = f"{int(default):,}"
+        return
+    # 先頭マイナスも許容
+    sign = -1 if cleaned.startswith("-") else 1
+    num_part = cleaned[1:] if cleaned.startswith("-") else cleaned
+    if not num_part.isdigit():
+        return
+    num = sign * int(num_part)
+    st.session_state[text_key] = f"{num:,}"
 
+def _format_float_text(text_key: str, default: float = 0.0, digits: int = 2):
+    txt = st.session_state.get(text_key, "")
+    cleaned = _clean_num_text(txt)
+    if cleaned == "":
+        st.session_state[text_key] = f"{float(default):,.{digits}f}"
+        return
+    # floatに変換できたら整形
+    try:
+        num = float(cleaned)
+        st.session_state[text_key] = f"{num:,.{digits}f}"
+    except Exception:
+        return
+
+def int_input_comma(label: str, key: str, default: int = 0, help: str | None = None) -> int:
+    """整数入力（カンマ不要、数字だけでOK）。入力欄が自動でカンマ整形される。"""
+    text_key = f"{key}__text"
     if text_key not in st.session_state:
         st.session_state[text_key] = f"{int(default):,}"
-        st.session_state[num_key] = int(default)
 
-    txt = st.text_input(label, value=st.session_state[text_key], key=text_key, help=help)
+    st.text_input(
+        label,
+        value=st.session_state[text_key],
+        key=text_key,
+        help=help or "数字だけ入力でOK（カンマ不要）。例: 1039071652",
+        on_change=_format_int_text,
+        args=(text_key, int(default)),
+    )
 
-    cleaned = _clean_num_text(txt)
+    cleaned = _clean_num_text(st.session_state.get(text_key, ""))
     try:
-        num = int(float(cleaned)) if cleaned != "" else int(default)
-        st.session_state[num_key] = num
-        # 入力が解釈できたら整形して戻す（カーソルは動くけど、視認性優先）
-        st.session_state[text_key] = f"{num:,}"
-        return num
+        return int(float(cleaned)) if cleaned != "" else int(default)
     except Exception:
-        st.error(f"「{label}」は数値（例: 1,234）で入力してね。")
-        return int(st.session_state.get(num_key, default))
+        st.error(f"「{label}」は数字で入力してね（例: 123456）。")
+        return int(default)
 
 def float_input_comma(label: str, key: str, default: float = 0.0, digits: int = 2, help: str | None = None) -> float:
-    """小数入力（カンマOK）。"""
+    """小数入力（カンマ不要、数字だけでOK）。"""
     text_key = f"{key}__text"
-    num_key = f"{key}__num"
-
     if text_key not in st.session_state:
         st.session_state[text_key] = f"{float(default):,.{digits}f}"
-        st.session_state[num_key] = float(default)
 
-    txt = st.text_input(label, value=st.session_state[text_key], key=text_key, help=help)
+    st.text_input(
+        label,
+        value=st.session_state[text_key],
+        key=text_key,
+        help=help or "数字だけ入力でOK（カンマ不要）。例: 85911.25",
+        on_change=_format_float_text,
+        args=(text_key, float(default), int(digits)),
+    )
 
-    cleaned = _clean_num_text(txt)
+    cleaned = _clean_num_text(st.session_state.get(text_key, ""))
     try:
-        num = float(cleaned) if cleaned != "" else float(default)
-        st.session_state[num_key] = num
-        st.session_state[text_key] = f"{num:,.{digits}f}"
-        return num
+        return float(cleaned) if cleaned != "" else float(default)
     except Exception:
-        st.error(f"「{label}」は数値（例: 12,345.67）で入力してね。")
-        return float(st.session_state.get(num_key, default))
+        st.error(f"「{label}」は数字で入力してね（例: 12345.67）。")
+        return float(default)
+
+
 
 
 
@@ -306,6 +337,7 @@ tab_sim, tab_fc = st.tabs(["94%シミュレーション", "固定費カバー率
 # 94% simulation (Main)
 # -------------------------
 with tab_sim:
+    cs = _chart_settings(graph_size)
     st.subheader("月次シミュレーション")
 
     colL, colR = st.columns([1.1, 1.2], gap="large")
@@ -451,6 +483,8 @@ with tab_sim:
         },
         domain={"x": [0, 1], "y": [0, 1]},
     ))
+    cs = _chart_settings(graph_size)
+
     fig_occ.update_layout(template="plotly_dark", width=cs["w_main"] if not cs["use_container"] else None, height=cs["h_occ"], margin=dict(l=8, r=8, t=32, b=8))
     _plotly_center(fig_occ, cs["w_main"], cs["use_container"])
 
@@ -661,6 +695,8 @@ with tab_fc:
                     line=dict(dash="dash", width=2),
                     hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
                 ))
+                cs2 = _chart_settings(graph_size)
+
                 fig_occ_m.update_layout(template="plotly_dark", width=cs2["w_period"] if not cs2["use_container"] else None, height=cs2["h_line"], yaxis_title="稼働率（%）", margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                 _plotly_center(fig_occ_m, cs2["w_period"], cs2["use_container"])
 
