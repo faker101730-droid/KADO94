@@ -7,132 +7,103 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="KADO94", layout="wide")
 
 # -----------------------------
+# -----------------------------
 # 入力：数字だけ打てばOK → 自動でカンマ整形（例: 1039071652 → 1,039,071,652）
-# ※Streamlitのnumber_inputは入力欄にカンマ表示できないため、text_inputで実現しています。
+#
+# Streamlitのnumber_inputは入力欄にカンマ表示ができないため、text_inputで実現します。
+# ただし、text_inputの「自分自身の値」をコールバック内で書き換えると反映されない環境があるため、
+# **ウィジェットkeyを世代管理して描画し直す**方式で、確実に入力欄をカンマ表示へ更新します。
 # -----------------------------
 def _clean_num_text(s: str) -> str:
     return (s or "").replace(",", "").replace(" ", "").replace("　", "").replace("_", "")
 
-def _format_int_text(text_key: str, default: int = 0):
-    txt = st.session_state.get(text_key, "")
-    cleaned = _clean_num_text(txt)
-    if cleaned == "":
-        st.session_state[text_key] = f"{int(default):,}"
-        return
-    # 先頭マイナスも許容
-    sign = -1 if cleaned.startswith("-") else 1
-    num_part = cleaned[1:] if cleaned.startswith("-") else cleaned
-    if not num_part.isdigit():
-        return
-    num = sign * int(num_part)
-    st.session_state[text_key] = f"{num:,}"
-
-def _format_float_text(text_key: str, default: float = 0.0, digits: int = 2):
-    txt = st.session_state.get(text_key, "")
-    cleaned = _clean_num_text(txt)
-    if cleaned == "":
-        st.session_state[text_key] = f"{float(default):,.{digits}f}"
-        return
-    # floatに変換できたら整形
+def _rerun():
+    # Streamlitのバージョン差分吸収
     try:
-        num = float(cleaned)
-        st.session_state[text_key] = f"{num:,.{digits}f}"
+        st.rerun()
     except Exception:
-        return
+        st.experimental_rerun()
 
 def int_input_comma(label: str, key: str, default: int = 0, help: str | None = None) -> int:
-    """整数入力（カンマ不要、数字だけでOK）。入力欄が自動でカンマ整形される。"""
-    text_key = f"{key}__text"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = f"{int(default):,}"
+    """整数入力（数字だけでOK）。確定後に入力欄をカンマ整形して表示する。"""
+    fmt_key = f"{key}__fmt"
+    num_key = f"{key}__num"
+    rev_key = f"{key}__rev"
 
-    st.text_input(
+    if rev_key not in st.session_state:
+        st.session_state[rev_key] = 0
+        st.session_state[fmt_key] = f"{int(default):,}"
+        st.session_state[num_key] = int(default)
+
+    widget_key = f"{key}__w{st.session_state[rev_key]}"
+    txt = st.text_input(
         label,
-        value=st.session_state[text_key],
-        key=text_key,
-        help=help or "数字だけ入力でOK（カンマ不要）。例: 1039071652",
-        on_change=_format_int_text,
-        args=(text_key, int(default)),
+        value=st.session_state[fmt_key],
+        key=widget_key,
+        help=help or "数字だけ入力でOK（例: 1039071652）",
     )
 
-    cleaned = _clean_num_text(st.session_state.get(text_key, ""))
-    try:
-        return int(float(cleaned)) if cleaned != "" else int(default)
-    except Exception:
-        st.error(f"「{label}」は数字で入力してね（例: 123456）。")
-        return int(default)
+    cleaned = _clean_num_text(txt)
+    if cleaned == "":
+        num = int(default)
+    else:
+        sign = -1 if cleaned.startswith("-") else 1
+        num_part = cleaned[1:] if cleaned.startswith("-") else cleaned
+        if not num_part.isdigit():
+            st.error(f"「{label}」は数字で入力してね（例: 123456）。")
+            return int(st.session_state[num_key])
+        num = sign * int(num_part)
+
+    formatted = f"{num:,}"
+    # 表示用テキストが変わったら、ウィジェットを世代交代して再描画（入力欄にカンマ反映）
+    if formatted != st.session_state[fmt_key]:
+        st.session_state[fmt_key] = formatted
+        st.session_state[num_key] = num
+        st.session_state[rev_key] += 1
+        _rerun()
+
+    st.session_state[num_key] = num
+    return num
 
 def float_input_comma(label: str, key: str, default: float = 0.0, digits: int = 2, help: str | None = None) -> float:
-    """小数入力（カンマ不要、数字だけでOK）。"""
-    text_key = f"{key}__text"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = f"{float(default):,.{digits}f}"
+    """小数入力（数字だけでOK）。確定後に入力欄をカンマ整形して表示する。"""
+    fmt_key = f"{key}__fmt"
+    num_key = f"{key}__num"
+    rev_key = f"{key}__rev"
 
-    st.text_input(
+    if rev_key not in st.session_state:
+        st.session_state[rev_key] = 0
+        st.session_state[fmt_key] = f"{float(default):,.{digits}f}"
+        st.session_state[num_key] = float(default)
+
+    widget_key = f"{key}__w{st.session_state[rev_key]}"
+    txt = st.text_input(
         label,
-        value=st.session_state[text_key],
-        key=text_key,
-        help=help or "数字だけ入力でOK（カンマ不要）。例: 85911.25",
-        on_change=_format_float_text,
-        args=(text_key, float(default), int(digits)),
+        value=st.session_state[fmt_key],
+        key=widget_key,
+        help=help or "数字だけ入力でOK（例: 85911.25）",
     )
 
-    cleaned = _clean_num_text(st.session_state.get(text_key, ""))
-    try:
-        return float(cleaned) if cleaned != "" else float(default)
-    except Exception:
-        st.error(f"「{label}」は数字で入力してね（例: 12345.67）。")
-        return float(default)
+    cleaned = _clean_num_text(txt)
+    if cleaned == "":
+        num = float(default)
+    else:
+        try:
+            num = float(cleaned)
+        except Exception:
+            st.error(f"「{label}」は数字で入力してね（例: 12345.67）。")
+            return float(st.session_state[num_key])
 
+    formatted = f"{num:,.{digits}f}"
+    if formatted != st.session_state[fmt_key]:
+        st.session_state[fmt_key] = formatted
+        st.session_state[num_key] = num
+        st.session_state[rev_key] += 1
+        _rerun()
 
+    st.session_state[num_key] = num
+    return num
 
-
-
-# -------------------------
-# Helpers
-# -------------------------
-def to_month_start(d: date) -> pd.Timestamp:
-    ts = pd.to_datetime(d)
-    return pd.Timestamp(year=ts.year, month=ts.month, day=1)
-
-def days_in_month(month_start: pd.Timestamp) -> int:
-    return int((month_start + pd.offsets.MonthEnd(0)).day)
-
-def excel_round0(x: float) -> int:
-    """Excelの0桁丸め（四捨五入：0.5は切り上げ）に寄せる"""
-    if x is None:
-        return 0
-    try:
-        xf = float(x)
-    except Exception:
-        return 0
-    if math.isnan(xf):
-        return 0
-    if xf >= 0:
-        return int(math.floor(xf + 0.5))
-    return -int(math.floor(abs(xf) + 0.5))
-
-def fmt_int_excel(x) -> str:
-    try:
-        return f"{excel_round0(float(x)):,}"
-    except Exception:
-        return str(x)
-
-def yen(x):
-    if x is None or (isinstance(x, float) and (pd.isna(x))):
-        return ""
-    try:
-        return f"¥{excel_round0(float(x)):,}"
-    except Exception:
-        return str(x)
-
-
-
-def month_label(ts: pd.Timestamp) -> str:
-    try:
-        return ts.strftime('%Y-%m')
-    except Exception:
-        return str(ts)
 
 
 def _chart_settings(size: str):
