@@ -86,22 +86,46 @@ def simulate_month(
     beds: float,
     los: float,
     unit_price: float,  # 入院単価（円/人日）
+    # 目標の指定方法（目標値だけシミュレーションで使用）
+    target_mode: str = "稼働率",
+    target_admissions: float | None = None,
+    target_revenue: float | None = None,
     # 実績（任意）
     patient_days_actual: float | None = None,
     admissions_actual: float | None = None,
     revenue_actual: float | None = None,
 ):
-    """月次の稼働率94%（or任意目標）シミュレーション。
-    実績は任意入力。未入力なら「目標値のみ」を計算して返す。
+    """月次シミュレーション。
+
+    - 目標は基本「稼働率（target_occ）」で計算
+    - ただし target_mode が「新入院数」「入院収入」の場合は、それを起点に必要延べ患者数を逆算
+    - 実績は任意入力。未入力なら比較系（増収額・追加必要量）は None を返す
     """
     d = days_in_month(month_start)
     max_patient_days = beds * d
-    required_patient_days = max_patient_days * target_occ
 
-    # 目標：必要新入院（目標値のみでも出せる）
-    required_admissions_target = math.ceil(required_patient_days / los) if los and los > 0 else None
+    # --- 目標の置き方 ---
+    required_patient_days = None
+    if target_mode == "新入院数" and target_admissions is not None and los and los > 0:
+        # 新入院数（目標）→ 必要延べ患者数（人日）
+        required_patient_days = float(target_admissions) * float(los)
+    elif target_mode == "入院収入" and target_revenue is not None and unit_price and unit_price > 0:
+        # 入院収入（目標）→ 必要延べ患者数（人日）
+        required_patient_days = float(target_revenue) / float(unit_price)
+    else:
+        # 稼働率（目標）→ 必要延べ患者数（人日）
+        required_patient_days = float(max_patient_days) * float(target_occ)
 
-    # 実績があれば比較系を計算
+    # 計算上の目標稼働率（新入院数/入院収入起点のときに表示用）
+    target_occ_calc = (required_patient_days / max_patient_days) if max_patient_days else None
+
+    # 目標：必要新入院（目標だけでも出せる）
+    if target_mode == "新入院数" and target_admissions is not None:
+        required_admissions_target = math.ceil(float(target_admissions))
+    else:
+        required_admissions_target = math.ceil(required_patient_days / los) if los and los > 0 else None
+
+    # --- 実績があれば比較系を計算 ---
     occ_actual = None
     add_patient_days = None
     add_admissions = None
@@ -130,6 +154,7 @@ def simulate_month(
         "month_days": d,
         "max_patient_days_100": max_patient_days,
         "required_patient_days_target": required_patient_days,
+        "target_occ_calc": target_occ_calc,
         "unit_price": unit_price,
         "revenue_target": revenue_target,
 
@@ -220,6 +245,25 @@ with tab_sim:
         beds = st.number_input("稼働病床数", min_value=0.0, value=401.0, step=1.0)
         los = st.number_input("平均在院日数", min_value=0.1, value=10.4, step=0.1)
 
+
+        # --- 目標の設定（実績不要モードで使用） ---
+        target_mode = "稼働率"
+        target_admissions = None
+        target_revenue = None
+
+        st.caption(f"稼働病床数: {beds:,.0f} 床 / 平均在院日数: {los:.1f} 日")
+
+        if input_mode == "目標値だけ（実績不要）":
+            st.markdown("##### 目標の設定")
+            target_mode = st.radio("目標の指定方法", ["稼働率", "新入院数", "入院収入"], horizontal=True)
+            if target_mode == "新入院数":
+                target_admissions = st.number_input("新入院数（目標）", min_value=0.0, value=900.0, step=1.0)
+                st.caption(f"入力値: {target_admissions:,.0f} 人")
+            elif target_mode == "入院収入":
+                target_revenue = st.number_input("入院収入（目標・円）", min_value=0.0, value=1_000_000_000.0, step=1_000_000.0)
+                st.caption(f"入力値: {yen(target_revenue)}")
+            else:
+                st.caption(f"入力値: 目標稼働率 {(target_occ*100):.1f}%")
         # --- 実績入力（任意） ---
         patient_days_actual = None
         admissions_actual = None
@@ -228,14 +272,20 @@ with tab_sim:
         if input_mode == "実績と比較（増収額まで）":
             st.markdown("##### 実績（比較する場合は入力）")
             patient_days_actual = st.number_input("延べ患者数（実績・人日）", min_value=0.0, value=10136.0, step=1.0)
+            st.caption(f"入力値: {patient_days_actual:,.0f} 人日")
             admissions_actual = st.number_input("新入院数（実績）", min_value=0.0, value=916.0, step=1.0)
+            st.caption(f"入力値: {admissions_actual:,.0f} 人")
             revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=870_000_000.0, step=1_000_000.0)
+            st.caption(f"入力値: {yen(revenue_actual)}")
 
         else:
             with st.expander("実績を入力して増収額も見たい（任意）"):
                 patient_days_actual = st.number_input("延べ患者数（実績・人日）", min_value=0.0, value=0.0, step=1.0)
+                st.caption(f"入力値: {patient_days_actual:,.0f} 人日")
                 admissions_actual = st.number_input("新入院数（実績）", min_value=0.0, value=0.0, step=1.0)
+                st.caption(f"入力値: {admissions_actual:,.0f} 人")
                 revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=0.0, step=1_000_000.0)
+                st.caption(f"入力値: {yen(revenue_actual)}")
 
                 # 未入力（0扱い）をNoneに変換：比較表示を抑制
                 if patient_days_actual == 0:
@@ -263,6 +313,7 @@ with tab_sim:
                 st.info(f"入院単価（自動）: {unit_price_raw:,.2f} 円/人日（表示: {yen(unit_price_raw)}）")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=85_911.0, step=100.0)
+            st.caption(f"入力値: {yen(unit_price)} / 人日")
 
         if input_mode == "目標値だけ（実績不要）":
             st.caption("※「目標値だけ」では増収額などの比較指標は、実績を入力しない限り表示されません。")
@@ -272,6 +323,9 @@ with tab_sim:
             beds=beds,
             los=los,
             unit_price=unit_price,
+            target_mode=target_mode,
+            target_admissions=target_admissions,
+            target_revenue=target_revenue,
             patient_days_actual=patient_days_actual,
             admissions_actual=admissions_actual,
             revenue_actual=revenue_actual,
@@ -280,71 +334,108 @@ with tab_sim:
     st.divider()
 
     # --- 主要指標 ---
+    occ_actual = result["occ_actual"]
+    target_occ_calc = result["target_occ_calc"]
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("実績稼働率", f"{(result['occ_actual']*100):.1f}%" if result["occ_actual"] is not None else "—")
-    c2.metric("必要延べ患者数（目標稼働率）", f"{fmt_int_excel(result['required_patient_days_target'])} 人日")
-    c3.metric("入院収入（目標稼働率）", yen(result["revenue_target"]))
-    c4.metric("増収額（目標−実績）", yen(result["delta_revenue"]) if result["delta_revenue"] is not None else "—")
+    c1.metric("稼働率（実績）", f"{(occ_actual*100):.1f}%" if occ_actual is not None else "—")
+    c2.metric("稼働率（目標）", f"{(target_occ_calc*100):.1f}%" if target_occ_calc is not None else "—")
+    c3.metric("必要延べ患者数（目標）", f"{fmt_int_excel(result['required_patient_days_target'])} 人日")
+    c4.metric("入院収入（目標）", yen(result["revenue_target"]))
 
     c5, c6, c7, c8 = st.columns(4)
-    c5.metric("追加必要延べ患者数", f"{fmt_int_excel(result['add_patient_days'])} 人日" if result["add_patient_days"] is not None else "—")
-    c6.metric("追加必要新入院（推計）", f"{fmt_int_excel(result['add_admissions'])} 人" if result["add_admissions"] is not None else "—")
-    c7.metric("必要新入院（推計・実績加算）", f"{fmt_int_excel(result['required_admissions'])} 人" if result["required_admissions"] is not None else "—")
-    c8.metric("必要新入院（目標のみ）", f"{fmt_int_excel(result['required_admissions_target'])} 人" if result["required_admissions_target"] is not None else "—")
+    c5.metric("目標新入院数（推計）", f"{fmt_int_excel(result['required_admissions_target'])} 人" if result["required_admissions_target"] is not None else "—")
+    c6.metric("増収額（目標−実績）", yen(result["delta_revenue"]) if result["delta_revenue"] is not None else "—")
+    c7.metric("追加必要延べ患者数", f"{fmt_int_excel(result['add_patient_days'])} 人日" if result["add_patient_days"] is not None else "—")
+    c8.metric("追加必要新入院（推計）", f"{fmt_int_excel(result['add_admissions'])} 人" if result["add_admissions"] is not None else "—")
+
+    if result["required_admissions"] is not None:
+        st.caption(f"必要新入院（実績加算）: {fmt_int_excel(result['required_admissions'])} 人")
 
     if input_mode == "目標値だけ（実績不要）" and result["delta_revenue"] is None:
         st.info("実績値を入れていないので、増収額や追加必要量は「—」表示です（必要なら上の『実績を入力して増収額も見たい』を開いて入力）。")
 
-    st.markdown("#### グラフ（実績 vs 目標）")
+    st.markdown("#### グラフ（コンパクト）")
 
-    # 稼働率：バレット（実績バー）＋目標ライン
+    # -------------------------
+    # 稼働率（実績 or 目標）: 94%未満は赤
+    # -------------------------
+    occ_actual = result["occ_actual"]
+    target_occ_calc = result["target_occ_calc"]
+    occ_base = occ_actual if occ_actual is not None else (target_occ_calc if target_occ_calc is not None else 0.0)
+    occ_title = "稼働率（実績）" if occ_actual is not None else "稼働率（目標）"
+    occ_pct = float(occ_base) * 100.0
+    occ_color = "#EF4444" if occ_pct < float(target_occ) * 100.0 else "#22C55E"
+
     fig_occ = go.Figure()
     fig_occ.add_trace(go.Indicator(
         mode="number+gauge",
-        value=float(result["occ_actual"] * 100),
-        number={"suffix": "%", "font": {"size": 26}},
-        title={"text": "稼働率（実績）"},
+        value=float(occ_pct),
+        number={"suffix": "%", "font": {"size": 22}},
+        title={"text": occ_title},
         gauge={
             "shape": "bullet",
             "axis": {"range": [0, 100]},
             "threshold": {"line": {"width": 4}, "value": float(target_occ * 100)},
-            "bar": {"thickness": 0.18},
+            "bar": {"thickness": 0.14, "color": occ_color},
         },
         domain={"x": [0, 1], "y": [0, 1]},
     ))
-    fig_occ.update_layout(template="plotly_dark", height=110, margin=dict(l=10, r=10, t=35, b=10))
+    fig_occ.update_layout(template="plotly_dark", height=90, margin=dict(l=10, r=10, t=30, b=0))
     st.plotly_chart(fig_occ, use_container_width=True)
 
-    # 入院収入：実績 vs 目標（数値ラベル）
+    # -------------------------
+    # 入院収入：実績（任意） vs 目標
+    # -------------------------
+    labels = []
+    values = []
+    texts = []
+    if revenue_actual is not None:
+        labels.append("実績")
+        values.append(float(revenue_actual))
+        texts.append(yen(revenue_actual))
+
+    labels.append("目標")
+    values.append(float(result["revenue_target"]))
+    texts.append(yen(result["revenue_target"]))
+
     fig_rev = go.Figure()
     fig_rev.add_trace(go.Bar(
-        x=["実績", "目標"],
-        y=[float(revenue_actual), float(result["revenue_target"])],
-        text=[yen(revenue_actual), yen(result["revenue_target"])],
+        x=labels,
+        y=values,
+        text=texts,
         textposition="outside",
         cliponaxis=False,
-        width=[0.35, 0.35],
+        width=[0.35] * len(labels),
+        marker_line_width=0,
     ))
     fig_rev.update_layout(
         template="plotly_dark",
-        height=260,
+        height=220,
         yaxis_title="入院収入（円）",
-        margin=dict(l=10, r=10, t=20, b=10),
+        margin=dict(l=10, r=10, t=10, b=0),
     )
     st.plotly_chart(fig_rev, use_container_width=True)
 
-    # 追加必要量：横棒（ラベル付き）
-    fig_need = go.Figure()
-    fig_need.add_trace(go.Bar(
-        y=["追加必要延べ患者数（人日）", "追加必要新入院（推計）"],
-        x=[float(result["add_patient_days"]), float(result["add_admissions"])],
-        orientation="h",
-        text=[f"{result['add_patient_days']:,.0f}", f"{result['add_admissions']:,.0f}"],
-        textposition="outside",
-        cliponaxis=False,
-    ))
-    fig_need.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig_need, use_container_width=True)
+    # -------------------------
+    # 追加必要量（実績入力があるときだけ表示）
+    # -------------------------
+    if result["add_patient_days"] is not None and result["add_admissions"] is not None:
+        fig_need = go.Figure()
+        fig_need.add_trace(go.Bar(
+            y=["追加必要延べ患者数（人日）", "追加必要新入院（推計）"],
+            x=[float(result["add_patient_days"]), float(result["add_admissions"])],
+            orientation="h",
+            text=[f"{fmt_int_excel(result['add_patient_days'])}", f"{fmt_int_excel(result['add_admissions'])}"],
+            textposition="outside",
+            cliponaxis=False,
+            width=0.42,
+            marker_line_width=0,
+        ))
+        fig_need.update_layout(template="plotly_dark", height=160, margin=dict(l=10, r=10, t=10, b=0))
+        st.plotly_chart(fig_need, use_container_width=True)
+    else:
+        st.caption("※ 実績（延べ患者数・新入院数）を入力すると、追加必要量のグラフが表示されます。")
 
     st.markdown("#### 計算内訳")
     detail = pd.DataFrame(
@@ -483,15 +574,17 @@ with tab_fc:
 
                 dff = dff.sort_values("年月").copy()
                 x_month = dff["月"].tolist()
+                occ_values = (dff["実績稼働率"] * 100).tolist()
+                occ_colors = ["#EF4444" if v < float(target_occ)*100 else "#22C55E" for v in occ_values]
 
                 # 稼働率（実績 vs 目標）
                 fig_occ_m = go.Figure()
                 fig_occ_m.add_trace(go.Scatter(
-                    x=x_month, y=(dff["実績稼働率"] * 100),
+                    x=x_month, y=occ_values,
                     mode="lines+markers",
                     name="稼働率（実績）",
                     line=dict(width=2),
-                    marker=dict(size=6),
+                    marker=dict(size=6, color=occ_colors),
                     hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
                 ))
                 fig_occ_m.add_trace(go.Scatter(
@@ -503,7 +596,7 @@ with tab_fc:
                 ))
                 fig_occ_m.update_layout(
                     template="plotly_dark",
-                    height=280,
+                    height=240,
                     yaxis_title="稼働率（%）",
                     margin=dict(l=10, r=10, t=10, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -517,7 +610,7 @@ with tab_fc:
                     mode="lines+markers",
                     name="入院収入（実績）",
                     line=dict(width=2),
-                    marker=dict(size=6),
+                    marker=dict(size=6, color=occ_colors),
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
                 fig_rev_m.add_trace(go.Scatter(
@@ -525,12 +618,12 @@ with tab_fc:
                     mode="lines+markers",
                     name="入院収入（目標）",
                     line=dict(dash="dash", width=2),
-                    marker=dict(size=6),
+                    marker=dict(size=6, color=occ_colors),
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
                 fig_rev_m.update_layout(
                     template="plotly_dark",
-                    height=300,
+                    height=260,
                     yaxis_title="入院収入（円）",
                     margin=dict(l=10, r=10, t=10, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -549,7 +642,7 @@ with tab_fc:
                 ))
                 fig_delta.update_layout(
                     template="plotly_dark",
-                    height=280,
+                    height=240,
                     yaxis_title="増収額（円）",
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
@@ -563,7 +656,7 @@ with tab_fc:
                         mode="lines+markers",
                         name="固定費カバー率（実績）",
                         line=dict(width=2),
-                        marker=dict(size=6),
+                        marker=dict(size=6, color=occ_colors),
                         hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
                     ))
                     fig_cov.add_trace(go.Scatter(
@@ -571,12 +664,12 @@ with tab_fc:
                         mode="lines+markers",
                         name="固定費カバー率（目標）",
                         line=dict(dash="dash", width=2),
-                        marker=dict(size=6),
+                        marker=dict(size=6, color=occ_colors),
                         hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
                     ))
                     fig_cov.update_layout(
                         template="plotly_dark",
-                        height=280,
+                        height=240,
                         yaxis_title="固定費カバー率（倍）",
                         margin=dict(l=10, r=10, t=10, b=10),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
