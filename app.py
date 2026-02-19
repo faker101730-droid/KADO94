@@ -3,6 +3,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+import altair as alt
 st.set_page_config(page_title="KADO94", layout="wide")
 
 # -------------------------
@@ -23,6 +24,13 @@ def yen(x):
     except Exception:
         return str(x)
 
+
+
+def month_label(ts: pd.Timestamp) -> str:
+    try:
+        return ts.strftime('%Y-%m')
+    except Exception:
+        return str(ts)
 def simulate_month(
     month_start: pd.Timestamp,
     target_occ: float,
@@ -163,6 +171,43 @@ with tab_sim:
     c6.metric("追加必要新入院（推計）", f"{result['add_admissions']:,.0f} 人")
     c7.metric("必要新入院（推計）", f"{result['required_admissions']:,.0f} 人")
 
+
+    st.markdown("#### グラフ（実績 vs 目標）")
+
+    # 稼働率：実績バー＋目標ライン
+    df_occ = pd.DataFrame({"項目": ["稼働率"], "実績": [result["occ_actual"]], "目標": [target_occ]})
+    occ_base = alt.Chart(df_occ).encode(y=alt.Y("項目:N", title=None))
+    occ_bar = occ_base.mark_bar().encode(
+        x=alt.X("実績:Q", axis=alt.Axis(format=".0%"), title="稼働率"),
+        tooltip=[alt.Tooltip("実績:Q", format=".1%"), alt.Tooltip("目標:Q", format=".1%")],
+    )
+    occ_rule = occ_base.mark_rule().encode(
+        x="目標:Q",
+        tooltip=[alt.Tooltip("目標:Q", format=".1%")],
+    )
+    st.altair_chart((occ_bar + occ_rule).properties(height=90), use_container_width=True)
+
+    # 入院収入：実績 / 目標
+    df_rev = pd.DataFrame({"区分": ["実績", "目標"], "入院収入": [revenue_actual, result["revenue_target"]]})
+    rev_chart = alt.Chart(df_rev).mark_bar().encode(
+        x=alt.X("区分:N", title=None),
+        y=alt.Y("入院収入:Q", title="入院収入（円）"),
+        tooltip=[alt.Tooltip("区分:N"), alt.Tooltip("入院収入:Q", format=",.0f")],
+    ).properties(height=260)
+    st.altair_chart(rev_chart, use_container_width=True)
+
+    # 追加必要量
+    df_need = pd.DataFrame({
+        "項目": ["追加必要延べ患者数（人日）", "追加必要新入院（推計）"],
+        "値": [result["add_patient_days"], result["add_admissions"]],
+    })
+    need_chart = alt.Chart(df_need).mark_bar().encode(
+        y=alt.Y("項目:N", sort=None, title=None),
+        x=alt.X("値:Q", title=None),
+        tooltip=[alt.Tooltip("項目:N"), alt.Tooltip("値:Q", format=",.0f")],
+    ).properties(height=140)
+    st.altair_chart(need_chart, use_container_width=True)
+
     st.markdown("#### 計算内訳")
     detail = pd.DataFrame(
         [
@@ -285,6 +330,65 @@ with tab_fc:
             else:
                 dff = dfm[(dfm["年月"] >= start_ts) & (dfm["年月"] <= end_ts)].copy()
                 months = dff["年月"].nunique()
+
+                # --- グラフ用の派生列 ---
+                dff["月"] = dff["年月"].apply(month_label)
+                dff["実績稼働率"] = dff["延べ患者数（人日）"] / dff["最大延べ患者数（100%）"]
+                dff["目標稼働率"] = target_occ
+
+                # 目標稼働率時の入院収入（月次）
+                dff["入院単価（月次）"] = dff["入院収入（実績）"] / dff["延べ患者数（人日）"]
+                dff["入院収入（目標稼働率）"] = (dff["最大延べ患者数（100%）"] * target_occ) * dff["入院単価（月次）"]
+                dff["増収額（目標−実績）"] = dff["入院収入（目標稼働率）"] - dff["入院収入（実績）"]
+
+                st.markdown("#### 月次推移（期間内）")
+
+                occ_line = alt.Chart(dff).mark_line().encode(
+                    x=alt.X("月:N", title=None),
+                    y=alt.Y("実績稼働率:Q", axis=alt.Axis(format=".0%"), title="稼働率"),
+                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("実績稼働率:Q", format=".1%")],
+                )
+                occ_target = alt.Chart(dff).mark_line(strokeDash=[4,4]).encode(
+                    x="月:N",
+                    y=alt.Y("目標稼働率:Q", axis=alt.Axis(format=".0%")),
+                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("目標稼働率:Q", format=".1%")],
+                )
+                st.altair_chart((occ_line + occ_target).properties(height=260), use_container_width=True)
+
+                rev_line = alt.Chart(
+                    dff.melt(id_vars=["月"], value_vars=["入院収入（実績）", "入院収入（目標稼働率）"], var_name="区分", value_name="入院収入")
+                ).mark_line().encode(
+                    x=alt.X("月:N", title=None),
+                    y=alt.Y("入院収入:Q", title="入院収入（円）"),
+                    color="区分:N",
+                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("区分:N"), alt.Tooltip("入院収入:Q", format=",.0f")],
+                ).properties(height=260)
+                st.altair_chart(rev_line, use_container_width=True)
+
+                delta_bar = alt.Chart(dff).mark_bar().encode(
+                    x=alt.X("月:N", title=None),
+                    y=alt.Y("増収額（目標−実績）:Q", title="増収額（円）"),
+                    tooltip=[alt.Tooltip("月:N"), alt.Tooltip("増収額（目標−実績）:Q", format=",.0f")],
+                ).properties(height=220)
+                st.altair_chart(delta_bar, use_container_width=True)
+
+                # 固定費カバー率（月次）
+                if fixed_cost_month and fixed_cost_month > 0:
+                    dff["限界利益（実績）"] = dff["入院収入（実績）"] * (1 - var_cost_rate)
+                    dff["限界利益（目標）"] = dff["入院収入（目標稼働率）"] * (1 - var_cost_rate)
+                    dff["固定費カバー率（実績）"] = dff["限界利益（実績）"] / fixed_cost_month
+                    dff["固定費カバー率（目標）"] = dff["限界利益（目標）"] / fixed_cost_month
+
+                    cov_line = alt.Chart(
+                        dff.melt(id_vars=["月"], value_vars=["固定費カバー率（実績）", "固定費カバー率（目標）"], var_name="区分", value_name="固定費カバー率")
+                    ).mark_line().encode(
+                        x=alt.X("月:N", title=None),
+                        y=alt.Y("固定費カバー率:Q", title="固定費カバー率（倍）"),
+                        color="区分:N",
+                        tooltip=[alt.Tooltip("月:N"), alt.Tooltip("区分:N"), alt.Tooltip("固定費カバー率:Q", format=".2f")],
+                    ).properties(height=260)
+                    st.altair_chart(cov_line, use_container_width=True)
+
 
                 # Period aggregates
                 pd_actual = dff["延べ患者数（人日）"].sum()
