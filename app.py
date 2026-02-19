@@ -31,20 +31,6 @@ def month_label(ts: pd.Timestamp) -> str:
         return ts.strftime('%Y-%m')
     except Exception:
         return str(ts)
-def simulate_month(
-    month_start: pd.Timestamp,
-    target_occ: float,
-    beds: float,
-    patient_days_actual: float,
-    admissions_actual: float,
-    los: float,
-    revenue_actual: float,
-    unit_price: float,  # 入院単価（円/人日）
-    calc_mode: str = '高精度',
-):
-    d = days_in_month(month_start)
-    max_patient_days = beds * d
-    required_patient_days = max_patient_days * target_occ
 
 
 def apply_rounding(mode: str, **vals):
@@ -74,6 +60,19 @@ def apply_rounding(mode: str, **vals):
             out[k] = r0(out[k])
 
     return out
+def simulate_month(
+    month_start: pd.Timestamp,
+    target_occ: float,
+    beds: float,
+    patient_days_actual: float,
+    admissions_actual: float,
+    los: float,
+    revenue_actual: float,
+    unit_price: float,  # 入院単価（円/人日）
+):
+    d = days_in_month(month_start)
+    max_patient_days = beds * d
+    required_patient_days = max_patient_days * target_occ
 
     occ_actual = (patient_days_actual / max_patient_days) if max_patient_days else 0.0
     revenue_target = required_patient_days * unit_price
@@ -83,30 +82,18 @@ def apply_rounding(mode: str, **vals):
     add_admissions = math.ceil(add_patient_days / los) if los and los > 0 else 0
     required_admissions = admissions_actual + add_admissions
 
-    rounded = apply_rounding(
-        calc_mode,
-        unit_price=unit_price,
-        revenue_actual=revenue_actual,
-        revenue_target=revenue_target,
-        delta_revenue=delta_revenue,
-        max_patient_days_100=max_patient_days,
-        required_patient_days_target=required_patient_days,
-        add_patient_days=add_patient_days,
-        patient_days_actual=patient_days_actual,
-    )
-
     return {
         "month_start": month_start,
         "month_days": d,
-        "max_patient_days_100": rounded["max_patient_days_100"],
-        "required_patient_days_target": rounded["required_patient_days_target"],
+        "max_patient_days_100": max_patient_days,
+        "required_patient_days_target": required_patient_days,
         "occ_actual": occ_actual,
-        "revenue_target": rounded["revenue_target"],
-        "delta_revenue": rounded["delta_revenue"],
-        "add_patient_days": rounded["add_patient_days"],
+        "revenue_target": revenue_target,
+        "delta_revenue": delta_revenue,
+        "add_patient_days": add_patient_days,
         "add_admissions": add_admissions,
         "required_admissions": required_admissions,
-        "unit_price": rounded["unit_price"],
+        "unit_price": unit_price,
     }
 
 def read_monthly_table(uploaded_file):
@@ -201,7 +188,6 @@ with tab_sim:
             los=los,
             revenue_actual=revenue_actual,
             unit_price=unit_price,
-            calc_mode=calc_mode,
         )
 
     st.divider()
@@ -332,7 +318,6 @@ with tab_fc:
             los=los,
             revenue_actual=revenue_actual,
             unit_price=unit_price,
-            calc_mode=calc_mode,
         )
 
         # Fixed-cost coverage
