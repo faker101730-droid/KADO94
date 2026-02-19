@@ -266,7 +266,7 @@ with tab_sim:
 
         if input_mode == "目標値だけ（実績不要）":
             st.caption("※「目標値だけ」では増収額などの比較指標は、実績を入力しない限り表示されません。")
-result = simulate_month(
+    result = simulate_month(
             month_start=month_start,
             target_occ=target_occ,
             beds=beds,
@@ -295,7 +295,7 @@ result = simulate_month(
     if input_mode == "目標値だけ（実績不要）" and result["delta_revenue"] is None:
         st.info("実績値を入れていないので、増収額や追加必要量は「—」表示です（必要なら上の『実績を入力して増収額も見たい』を開いて入力）。")
 
-st.markdown("#### グラフ（実績 vs 目標）")
+    st.markdown("#### グラフ（実績 vs 目標）")
 
     # 稼働率：バレット（実績バー）＋目標ライン
     fig_occ = go.Figure()
@@ -370,9 +370,9 @@ st.markdown("#### グラフ（実績 vs 目標）")
     detail["値"] = [fmt(v, k) for v, k in zip(detail["値"], detail["項目"])]
     st.dataframe(detail, use_container_width=True, hide_index=True)
 
-# -------------------------
-# Fixed-cost coverage + Period
-# -------------------------
+    # -------------------------
+    # Fixed-cost coverage + Period
+    # -------------------------
 with tab_fc:
     st.subheader("固定費カバー率（単月）")
 
