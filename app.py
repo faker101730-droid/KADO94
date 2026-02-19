@@ -84,37 +84,71 @@ def simulate_month(
     month_start: pd.Timestamp,
     target_occ: float,
     beds: float,
-    patient_days_actual: float,
-    admissions_actual: float,
     los: float,
-    revenue_actual: float,
     unit_price: float,  # 入院単価（円/人日）
+    # 実績（任意）
+    patient_days_actual: float | None = None,
+    admissions_actual: float | None = None,
+    revenue_actual: float | None = None,
 ):
+    """月次の稼働率94%（or任意目標）シミュレーション。
+    実績は任意入力。未入力なら「目標値のみ」を計算して返す。
+    """
     d = days_in_month(month_start)
     max_patient_days = beds * d
     required_patient_days = max_patient_days * target_occ
 
-    occ_actual = (patient_days_actual / max_patient_days) if max_patient_days else 0.0
-    revenue_target = required_patient_days * unit_price
-    delta_revenue = revenue_target - revenue_actual
+    # 目標：必要新入院（目標値のみでも出せる）
+    required_admissions_target = math.ceil(required_patient_days / los) if los and los > 0 else None
 
-    add_patient_days = max(0.0, required_patient_days - patient_days_actual)
-    add_admissions = math.ceil(add_patient_days / los) if los and los > 0 else 0
-    required_admissions = admissions_actual + add_admissions
+    # 実績があれば比較系を計算
+    occ_actual = None
+    add_patient_days = None
+    add_admissions = None
+    required_admissions = None
+    delta_revenue = None
+
+    if patient_days_actual is not None and max_patient_days:
+        occ_actual = (patient_days_actual / max_patient_days)
+
+    revenue_target = required_patient_days * unit_price
+
+    if revenue_actual is not None:
+        delta_revenue = revenue_target - revenue_actual
+
+    if patient_days_actual is not None:
+        add_patient_days = max(0.0, required_patient_days - patient_days_actual)
+
+        if los and los > 0:
+            add_admissions = math.ceil(add_patient_days / los)
+
+        if admissions_actual is not None and add_admissions is not None:
+            required_admissions = admissions_actual + add_admissions
 
     return {
         "month_start": month_start,
         "month_days": d,
         "max_patient_days_100": max_patient_days,
         "required_patient_days_target": required_patient_days,
-        "occ_actual": occ_actual,
+        "unit_price": unit_price,
         "revenue_target": revenue_target,
+
+        # 実績（あれば）
+        "occ_actual": occ_actual,
+        "revenue_actual": revenue_actual,
         "delta_revenue": delta_revenue,
+        "patient_days_actual": patient_days_actual,
+        "admissions_actual": admissions_actual,
+
+        # 比較（あれば）
         "add_patient_days": add_patient_days,
         "add_admissions": add_admissions,
         "required_admissions": required_admissions,
-        "unit_price": unit_price,
+
+        # 目標だけでも出せる
+        "required_admissions_target": required_admissions_target,
     }
+
 
 def read_monthly_table(uploaded_file):
     """期間集計用の月次テーブルを読み込む（CSV / Excel）"""
@@ -166,6 +200,7 @@ st.caption("稼働率94%：入院収入シミュレーション & 固定費カ�
 
 with st.sidebar:
     st.subheader("共通設定")
+    input_mode = st.radio("シミュレーション", ["目標値だけ（実績不要）", "実績と比較（増収額まで）"], index=0)
     calc_mode = st.radio("計算モード", ["高精度", "Excel互換"], index=0, horizontal=True)
     target_occ = st.slider("目標稼働率", min_value=0.50, max_value=1.00, value=0.94, step=0.01)
     st.caption("※ Excelの計算ロジックをPythonに移植して計算します（Excel計算エンジンは使いません）。")
@@ -183,53 +218,84 @@ with tab_sim:
         month = st.date_input("年月（その月のどの日でもOK）", value=date.today().replace(day=1))
         month_start = to_month_start(month)
         beds = st.number_input("稼働病床数", min_value=0.0, value=401.0, step=1.0)
-        patient_days_actual = st.number_input("延べ患者数（人日）", min_value=0.0, value=10136.0, step=1.0)
-        admissions_actual = st.number_input("新入院数", min_value=0.0, value=916.0, step=1.0)
         los = st.number_input("平均在院日数", min_value=0.1, value=10.4, step=0.1)
 
-    with colR:
-        st.markdown("#### 実績収入と入院単価")
-        revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=870_000_000.0, step=1_000_000.0)
-        auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True)
-        if auto_unit:
-            unit_price_raw = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
-            # Excel互換：Excelの見た目・運用に合わせて「整数の単価」を計算に使用
-            unit_price = float(excel_round0(unit_price_raw)) if calc_mode == "Excel互換" else float(unit_price_raw)
+        # --- 実績入力（任意） ---
+        patient_days_actual = None
+        admissions_actual = None
+        revenue_actual = None
 
+        if input_mode == "実績と比較（増収額まで）":
+            st.markdown("##### 実績（比較する場合は入力）")
+            patient_days_actual = st.number_input("延べ患者数（実績・人日）", min_value=0.0, value=10136.0, step=1.0)
+            admissions_actual = st.number_input("新入院数（実績）", min_value=0.0, value=916.0, step=1.0)
+            revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=870_000_000.0, step=1_000_000.0)
+
+        else:
+            with st.expander("実績を入力して増収額も見たい（任意）"):
+                patient_days_actual = st.number_input("延べ患者数（実績・人日）", min_value=0.0, value=0.0, step=1.0)
+                admissions_actual = st.number_input("新入院数（実績）", min_value=0.0, value=0.0, step=1.0)
+                revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=0.0, step=1_000_000.0)
+
+                # 未入力（0扱い）をNoneに変換：比較表示を抑制
+                if patient_days_actual == 0:
+                    patient_days_actual = None
+                if admissions_actual == 0:
+                    admissions_actual = None
+                if revenue_actual == 0:
+                    revenue_actual = None
+
+    with colR:
+        st.markdown("#### 入院単価")
+
+        # 単価の決め方：実績があるときだけ自動計算が使える
+        can_auto = (revenue_actual is not None) and (patient_days_actual is not None) and (patient_days_actual != 0)
+
+        auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=can_auto, disabled=(not can_auto))
+
+        if auto_unit and can_auto:
+            unit_price_raw = (revenue_actual / patient_days_actual)
             if calc_mode == "Excel互換":
+                unit_price = float(excel_round0(unit_price_raw))
                 st.info(f"入院単価（自動・Excel互換）: {yen(unit_price)} / 人日（内部: {unit_price_raw:,.2f}）")
             else:
+                unit_price = float(unit_price_raw)
                 st.info(f"入院単価（自動）: {unit_price_raw:,.2f} 円/人日（表示: {yen(unit_price_raw)}）")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=85_911.0, step=100.0)
 
-
-        result = simulate_month(
+        if input_mode == "目標値だけ（実績不要）":
+            st.caption("※「目標値だけ」では増収額などの比較指標は、実績を入力しない限り表示されません。")
+result = simulate_month(
             month_start=month_start,
             target_occ=target_occ,
             beds=beds,
+            los=los,
+            unit_price=unit_price,
             patient_days_actual=patient_days_actual,
             admissions_actual=admissions_actual,
-            los=los,
             revenue_actual=revenue_actual,
-            unit_price=unit_price,
         )
 
     st.divider()
 
+    # --- 主要指標 ---
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("実績稼働率", f"{result['occ_actual']*100:.1f}%")
+    c1.metric("実績稼働率", f"{(result['occ_actual']*100):.1f}%" if result["occ_actual"] is not None else "—")
     c2.metric("必要延べ患者数（目標稼働率）", f"{fmt_int_excel(result['required_patient_days_target'])} 人日")
     c3.metric("入院収入（目標稼働率）", yen(result["revenue_target"]))
-    c4.metric("増収額（目標−実績）", yen(result["delta_revenue"]))
+    c4.metric("増収額（目標−実績）", yen(result["delta_revenue"]) if result["delta_revenue"] is not None else "—")
 
-    c5, c6, c7 = st.columns(3)
-    c5.metric("追加必要延べ患者数", f"{fmt_int_excel(result['add_patient_days'])} 人日")
-    c6.metric("追加必要新入院（推計）", f"{result['add_admissions']:,.0f} 人")
-    c7.metric("必要新入院（推計）", f"{result['required_admissions']:,.0f} 人")
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("追加必要延べ患者数", f"{fmt_int_excel(result['add_patient_days'])} 人日" if result["add_patient_days"] is not None else "—")
+    c6.metric("追加必要新入院（推計）", f"{fmt_int_excel(result['add_admissions'])} 人" if result["add_admissions"] is not None else "—")
+    c7.metric("必要新入院（推計・実績加算）", f"{fmt_int_excel(result['required_admissions'])} 人" if result["required_admissions"] is not None else "—")
+    c8.metric("必要新入院（目標のみ）", f"{fmt_int_excel(result['required_admissions_target'])} 人" if result["required_admissions_target"] is not None else "—")
 
+    if input_mode == "目標値だけ（実績不要）" and result["delta_revenue"] is None:
+        st.info("実績値を入れていないので、増収額や追加必要量は「—」表示です（必要なら上の『実績を入力して増収額も見たい』を開いて入力）。")
 
-    st.markdown("#### グラフ（実績 vs 目標）")
+st.markdown("#### グラフ（実績 vs 目標）")
 
     # 稼働率：バレット（実績バー）＋目標ライン
     fig_occ = go.Figure()
@@ -337,16 +403,16 @@ with tab_fc:
             month_start=month_start,
             target_occ=target_occ,
             beds=beds,
+            los=los,
+            unit_price=unit_price,
             patient_days_actual=patient_days_actual,
             admissions_actual=admissions_actual,
-            los=los,
             revenue_actual=revenue_actual,
-            unit_price=unit_price,
         )
 
         # Fixed-cost coverage
-        margin_actual = revenue_actual * (1 - var_cost_rate)
-        coverage_actual = (margin_actual / fixed_cost_month) if fixed_cost_month else None
+        margin_actual = (revenue_actual * (1 - var_cost_rate)) if (revenue_actual is not None) else None
+        coverage_actual = (margin_actual / fixed_cost_month) if (fixed_cost_month and margin_actual is not None) else None
 
         margin_target = result["revenue_target"] * (1 - var_cost_rate)
         coverage_target = (margin_target / fixed_cost_month) if fixed_cost_month else None
