@@ -17,7 +17,7 @@ def days_in_month(month_start: pd.Timestamp) -> int:
     return int((month_start + pd.offsets.MonthEnd(0)).day)
 
 def excel_round0(x: float) -> int:
-    """Excelの表示丸め（0桁、四捨五入=0.5は切り上げ）に寄せる"""
+    """Excelの0桁丸め（四捨五入：0.5は切り上げ）に寄せる"""
     if x is None:
         return 0
     try:
@@ -31,8 +31,10 @@ def excel_round0(x: float) -> int:
     return -int(math.floor(abs(xf) + 0.5))
 
 def fmt_int_excel(x) -> str:
-    """Excelっぽい0桁表示（カンマ付き）"""
-    return f"{excel_round0(float(x)):,}"
+    try:
+        return f"{excel_round0(float(x)):,}"
+    except Exception:
+        return str(x)
 
 def yen(x):
     if x is None or (isinstance(x, float) and (pd.isna(x))):
@@ -42,12 +44,7 @@ def yen(x):
     except Exception:
         return str(x)
 
-def excel15(x: float) -> float:
-    """Excelの15桁精度に寄せる（中間計算のズレ対策）"""
-    try:
-        return float(f"{float(x):.15g}")
-    except Exception:
-        return float(x)
+
 
 def month_label(ts: pd.Timestamp) -> str:
     try:
@@ -92,29 +89,16 @@ def simulate_month(
     los: float,
     revenue_actual: float,
     unit_price: float,  # 入院単価（円/人日）
-    calc_mode: str = 'Excel互換',
 ):
     d = days_in_month(month_start)
     max_patient_days = beds * d
-    if calc_mode == "Excel互換":
-        max_patient_days = excel15(max_patient_days)
     required_patient_days = max_patient_days * target_occ
-    if calc_mode == "Excel互換":
-        required_patient_days = excel15(required_patient_days)
 
     occ_actual = (patient_days_actual / max_patient_days) if max_patient_days else 0.0
-    if calc_mode == "Excel互換":
-        occ_actual = excel15(occ_actual)
     revenue_target = required_patient_days * unit_price
-    if calc_mode == "Excel互換":
-        revenue_target = excel15(revenue_target)
     delta_revenue = revenue_target - revenue_actual
-    if calc_mode == "Excel互換":
-        delta_revenue = excel15(delta_revenue)
 
     add_patient_days = max(0.0, required_patient_days - patient_days_actual)
-    if calc_mode == "Excel互換":
-        add_patient_days = excel15(add_patient_days)
     add_admissions = math.ceil(add_patient_days / los) if los and los > 0 else 0
     required_admissions = admissions_actual + add_admissions
 
@@ -182,7 +166,7 @@ st.caption("稼働率94%：入院収入シミュレーション & 固定費カ�
 
 with st.sidebar:
     st.subheader("共通設定")
-    calc_mode = st.radio("計算モード", ["高精度", "Excel互換"], index=1, horizontal=True)
+    calc_mode = st.radio("計算モード", ["高精度", "Excel互換"], index=0, horizontal=True)
     target_occ = st.slider("目標稼働率", min_value=0.50, max_value=1.00, value=0.94, step=0.01)
     st.caption("※ Excelの計算ロジックをPythonに移植して計算します（Excel計算エンジンは使いません）。")
 
@@ -208,10 +192,17 @@ with tab_sim:
         revenue_actual = st.number_input("入院収入（実績・円）", min_value=0.0, value=870_000_000.0, step=1_000_000.0)
         auto_unit = st.checkbox("入院単価（1人日あたり）を実績から自動計算する", value=True)
         if auto_unit:
-            unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
-            st.info(f"入院単価（自動）: {yen(unit_price)} / 人日")
+            unit_price_raw = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
+            # Excel互換：Excelの見た目・運用に合わせて「整数の単価」を計算に使用
+            unit_price = float(excel_round0(unit_price_raw)) if calc_mode == "Excel互換" else float(unit_price_raw)
+
+            if calc_mode == "Excel互換":
+                st.info(f"入院単価（自動・Excel互換）: {yen(unit_price)} / 人日（内部: {unit_price_raw:,.2f}）")
+            else:
+                st.info(f"入院単価（自動）: {unit_price_raw:,.2f} 円/人日（表示: {yen(unit_price_raw)}）")
         else:
             unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=85_911.0, step=100.0)
+
 
         result = simulate_month(
             month_start=month_start,
@@ -222,7 +213,6 @@ with tab_sim:
             los=los,
             revenue_actual=revenue_actual,
             unit_price=unit_price,
-           calc_mode=calc_mode,
         )
 
     st.divider()
@@ -235,17 +225,8 @@ with tab_sim:
 
     c5, c6, c7 = st.columns(3)
     c5.metric("追加必要延べ患者数", f"{fmt_int_excel(result['add_patient_days'])} 人日")
-    c6.metric("追加必要新入院（推計）", f"{fmt_int_excel(result['add_admissions'])} 人")
-    c7.metric("必要新入院（推計）", f"{fmt_int_excel(result['required_admissions'])} 人")
-
-    with st.expander("Excel一致チェック（内部値）"):
-        st.write(f"月日数: {result['month_days']}")
-        st.write(f"延べ患者数(100%): {result['max_patient_days_100']:.10f}")
-        st.write(f"必要延べ患者数(94% 内部): {result['required_patient_days_target']:.10f}  /  表示: {fmt_int_excel(result['required_patient_days_target'])}")
-        st.write(f"入院単価(内部): {unit_price:.10f}")
-        st.write(f"入院収入(目標 内部): {result['revenue_target']:.10f}  /  表示: {yen(result['revenue_target'])}")
-        st.write(f"増収額(内部): {result['delta_revenue']:.10f}  /  表示: {yen(result['delta_revenue'])}")
-        st.caption("※「Excel互換」は、Excelの15桁精度っぽい丸め（excel15）と、表示丸め（0.5切り上げ）に寄せています。")
+    c6.metric("追加必要新入院（推計）", f"{result['add_admissions']:,.0f} 人")
+    c7.metric("必要新入院（推計）", f"{result['required_admissions']:,.0f} 人")
 
 
     st.markdown("#### グラフ（実績 vs 目標）")
@@ -361,7 +342,6 @@ with tab_fc:
             los=los,
             revenue_actual=revenue_actual,
             unit_price=unit_price,
-           calc_mode=calc_mode,
         )
 
         # Fixed-cost coverage
