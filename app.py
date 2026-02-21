@@ -223,6 +223,31 @@ def read_monthly_table(uploaded_file):
     df = df.sort_values("年月").reset_index(drop=True)
     return df
 
+
+def chart_cfg(size: str):
+    """グラフサイズ設定（横幅が長すぎ問題の対策）"""
+    if size == "コンパクト":
+        return {"use_container": False, "width_main": 620, "width_period": 760,
+                "h_occ": 80, "h_rev": 200, "h_need": 150, "h_line": 230, "h_rev_line": 245}
+    if size == "標準":
+        return {"use_container": False, "width_main": 760, "width_period": 920,
+                "h_occ": 90, "h_rev": 220, "h_need": 160, "h_line": 240, "h_rev_line": 260}
+    # ワイド（全幅）
+    return {"use_container": True, "width_main": None, "width_period": None,
+            "h_occ": 90, "h_rev": 220, "h_need": 160, "h_line": 240, "h_rev_line": 260}
+
+def plotly_show(fig, cfg, width_key: str = "width_main"):
+    """中央寄せで表示（全幅/固定幅を切替）"""
+    if cfg.get("use_container"):
+        st.plotly_chart(fig, use_container_width=True)
+        return
+    w = cfg.get(width_key)
+    if w:
+        fig.update_layout(width=w)
+    left, mid, right = st.columns([1, 8, 1])
+    with mid:
+        st.plotly_chart(fig, use_container_width=False)
+
 # -------------------------
 # UI
 # -------------------------
@@ -233,8 +258,11 @@ with st.sidebar:
     st.subheader("共通設定")
     input_mode = st.radio("シミュレーション", ["目標値だけ（実績不要）", "実績と比較（増収額まで）"], index=0)
     calc_mode = st.radio("計算モード", ["高精度", "Excel互換"], index=0, horizontal=True)
+    graph_size = st.selectbox("グラフ表示サイズ", ["コンパクト", "標準", "ワイド（全幅）"], index=1)
     target_occ = st.slider("目標稼働率", min_value=0.50, max_value=1.00, value=0.94, step=0.01)
     st.caption("※ Excelの計算ロジックをPythonに移植して計算します（Excel計算エンジンは使いません）。")
+
+gcfg = chart_cfg(graph_size)
 
 tab_sim, tab_fc = st.tabs(["94%シミュレーション", "固定費カバー率・期間集計"])
 
@@ -391,8 +419,8 @@ with tab_sim:
         },
         domain={"x": [0, 1], "y": [0, 1]},
     ))
-    fig_occ.update_layout(template="plotly_dark", height=90, margin=dict(l=10, r=10, t=30, b=0))
-    st.plotly_chart(fig_occ, use_container_width=True)
+    fig_occ.update_layout(template="plotly_dark", height=gcfg["h_occ"], margin=dict(l=10, r=10, t=30, b=0))
+    plotly_show(fig_occ, gcfg, "width_main")
 
     # -------------------------
     # 入院収入：実績（任意） vs 目標
@@ -421,11 +449,11 @@ with tab_sim:
     ))
     fig_rev.update_layout(
         template="plotly_dark",
-        height=220,
+        height=gcfg["h_rev"],
         yaxis_title="入院収入（円）",
         margin=dict(l=10, r=10, t=10, b=0),
     )
-    st.plotly_chart(fig_rev, use_container_width=True)
+    plotly_show(fig_rev, gcfg, "width_main")
 
     # -------------------------
     # 追加必要量（実績入力があるときだけ表示）
@@ -442,8 +470,8 @@ with tab_sim:
             width=0.42,
             marker_line_width=0,
         ))
-        fig_need.update_layout(template="plotly_dark", height=160, margin=dict(l=10, r=10, t=10, b=0))
-        st.plotly_chart(fig_need, use_container_width=True)
+        fig_need.update_layout(template="plotly_dark", height=gcfg["h_need"], margin=dict(l=10, r=10, t=10, b=0))
+        plotly_show(fig_need, gcfg, "width_main")
     else:
         st.caption("※ 実績（延べ患者数・新入院数）を入力すると、追加必要量のグラフが表示されます。")
 
@@ -606,12 +634,12 @@ with tab_fc:
                 ))
                 fig_occ_m.update_layout(
                     template="plotly_dark",
-                    height=240,
+                    height=gcfg["h_line"],
                     yaxis_title="稼働率（%）",
                     margin=dict(l=10, r=10, t=10, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                st.plotly_chart(fig_occ_m, use_container_width=True)
+                plotly_show(fig_occ_m, gcfg, "width_period")
 
                 # 入院収入（実績 vs 目標）
                 fig_rev_m = go.Figure()
@@ -633,12 +661,12 @@ with tab_fc:
                 ))
                 fig_rev_m.update_layout(
                     template="plotly_dark",
-                    height=260,
+                    height=gcfg["h_rev_line"],
                     yaxis_title="入院収入（円）",
                     margin=dict(l=10, r=10, t=10, b=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                st.plotly_chart(fig_rev_m, use_container_width=True)
+                plotly_show(fig_rev_m, gcfg, "width_period")
 
                 # 増収額（棒）
                 fig_delta = go.Figure()
@@ -652,11 +680,11 @@ with tab_fc:
                 ))
                 fig_delta.update_layout(
                     template="plotly_dark",
-                    height=240,
+                    height=gcfg["h_line"],
                     yaxis_title="増収額（円）",
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
-                st.plotly_chart(fig_delta, use_container_width=True)
+                plotly_show(fig_delta, gcfg, "width_period")
 
                 # 固定費カバー率（月次）
                 if fixed_cost_month and fixed_cost_month > 0:
@@ -679,12 +707,12 @@ with tab_fc:
                     ))
                     fig_cov.update_layout(
                         template="plotly_dark",
-                        height=240,
+                        height=gcfg["h_line"],
                         yaxis_title="固定費カバー率（倍）",
                         margin=dict(l=10, r=10, t=10, b=10),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
-                    st.plotly_chart(fig_cov, use_container_width=True)
+                    plotly_show(fig_cov, gcfg, "width_period")
 
 
                 s1, s2, s3, s4 = st.columns(4)
