@@ -715,7 +715,23 @@ with tab_fc:
                     plotly_show(fig_cov, gcfg, "width_period")
 
 
-                s1, s2, s3, s4 = st.columns(4)
+                
+                # --- 期間集計（実績・目標） ---
+                pd_actual = dff["延べ患者数（人日）"].sum()
+                rev_actual = dff["入院収入（実績）"].sum()
+                unit_price_period = (rev_actual / pd_actual) if pd_actual else 0.0
+
+                max_pd = dff["最大延べ患者数（100%）"].sum()
+                req_pd = max_pd * target_occ
+                rev_target = req_pd * unit_price_period
+
+                margin_period_actual = rev_actual * (1 - var_cost_rate)
+                margin_period_target = rev_target * (1 - var_cost_rate)
+
+                fixed_cost_period = fixed_cost_month * months
+                cov_period_actual = (margin_period_actual / fixed_cost_period) if fixed_cost_period else None
+                cov_period_target = (margin_period_target / fixed_cost_period) if fixed_cost_period else None
+
                 s1, s2, s3, s4 = st.columns(4)
                 s1.metric("月数", f"{months} ヶ月")
                 s2.metric("期間延べ患者数（実績）", f"{pd_actual:,.0f} 人日")
