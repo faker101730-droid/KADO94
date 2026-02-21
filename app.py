@@ -6,88 +6,6 @@ import streamlit as st
 import plotly.graph_objects as go
 st.set_page_config(page_title="KADO94", layout="wide")
 
-# -----------------------------
-# 入力：数字だけ打てばOK → 自動でカンマ整形（例: 1039071652 → 1,039,071,652）
-# ※Streamlitのnumber_inputは入力欄にカンマ表示できないため、text_inputで実現しています。
-# -----------------------------
-def _clean_num_text(s: str) -> str:
-    return (s or "").replace(",", "").replace(" ", "").replace("　", "").replace("_", "")
-
-def _format_int_text(text_key: str, default: int = 0):
-    txt = st.session_state.get(text_key, "")
-    cleaned = _clean_num_text(txt)
-    if cleaned == "":
-        st.session_state[text_key] = f"{int(default):,}"
-        return
-    # 先頭マイナスも許容
-    sign = -1 if cleaned.startswith("-") else 1
-    num_part = cleaned[1:] if cleaned.startswith("-") else cleaned
-    if not num_part.isdigit():
-        return
-    num = sign * int(num_part)
-    st.session_state[text_key] = f"{num:,}"
-
-def _format_float_text(text_key: str, default: float = 0.0, digits: int = 2):
-    txt = st.session_state.get(text_key, "")
-    cleaned = _clean_num_text(txt)
-    if cleaned == "":
-        st.session_state[text_key] = f"{float(default):,.{digits}f}"
-        return
-    # floatに変換できたら整形
-    try:
-        num = float(cleaned)
-        st.session_state[text_key] = f"{num:,.{digits}f}"
-    except Exception:
-        return
-
-def int_input_comma(label: str, key: str, default: int = 0, help: str | None = None) -> int:
-    """整数入力（カンマ不要、数字だけでOK）。入力欄が自動でカンマ整形される。"""
-    text_key = f"{key}__text"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = f"{int(default):,}"
-
-    st.text_input(
-        label,
-        value=st.session_state[text_key],
-        key=text_key,
-        help=help or "数字だけ入力でOK（カンマ不要）。例: 1039071652",
-        on_change=_format_int_text,
-        args=(text_key, int(default)),
-    )
-
-    cleaned = _clean_num_text(st.session_state.get(text_key, ""))
-    try:
-        return int(float(cleaned)) if cleaned != "" else int(default)
-    except Exception:
-        st.error(f"「{label}」は数字で入力してね（例: 123456）。")
-        return int(default)
-
-def float_input_comma(label: str, key: str, default: float = 0.0, digits: int = 2, help: str | None = None) -> float:
-    """小数入力（カンマ不要、数字だけでOK）。"""
-    text_key = f"{key}__text"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = f"{float(default):,.{digits}f}"
-
-    st.text_input(
-        label,
-        value=st.session_state[text_key],
-        key=text_key,
-        help=help or "数字だけ入力でOK（カンマ不要）。例: 85911.25",
-        on_change=_format_float_text,
-        args=(text_key, float(default), int(digits)),
-    )
-
-    cleaned = _clean_num_text(st.session_state.get(text_key, ""))
-    try:
-        return float(cleaned) if cleaned != "" else float(default)
-    except Exception:
-        st.error(f"「{label}」は数字で入力してね（例: 12345.67）。")
-        return float(default)
-
-
-
-
-
 # -------------------------
 # Helpers
 # -------------------------
@@ -126,6 +44,12 @@ def yen(x):
     except Exception:
         return str(x)
 
+def fmt_int(x) -> str:
+    try:
+        return f"{int(round(float(x))):,}"
+    except Exception:
+        return str(x)
+
 
 
 def month_label(ts: pd.Timestamp) -> str:
@@ -133,24 +57,6 @@ def month_label(ts: pd.Timestamp) -> str:
         return ts.strftime('%Y-%m')
     except Exception:
         return str(ts)
-
-
-def _chart_settings(size: str):
-    """グラフの幅/高さを調整（横幅が長すぎ問題対策）"""
-    if size == "コンパクト":
-        return {"w_main": 640, "w_period": 720, "h_occ": 95, "h_bar": 220, "h_need": 170, "h_line": 260, "use_container": False}
-    if size == "標準":
-        return {"w_main": 760, "w_period": 900, "h_occ": 105, "h_bar": 250, "h_need": 190, "h_line": 290, "use_container": False}
-    # ワイド（全幅）
-    return {"w_main": None, "w_period": None, "h_occ": 115, "h_bar": 260, "h_need": 200, "h_line": 300, "use_container": True}
-
-def _plotly_center(fig, width: int | None, use_container: bool):
-    if use_container:
-        st.plotly_chart(fig, use_container_width=True)
-        return
-    cols = st.columns([1, 8, 1])
-    with cols[1]:
-        st.plotly_chart(fig, use_container_width=False)
 
 
 def apply_rounding(mode: str, **vals):
@@ -327,7 +233,6 @@ with st.sidebar:
     st.subheader("共通設定")
     input_mode = st.radio("シミュレーション", ["目標値だけ（実績不要）", "実績と比較（増収額まで）"], index=0)
     calc_mode = st.radio("計算モード", ["高精度", "Excel互換"], index=0, horizontal=True)
-    graph_size = st.selectbox("グラフ表示サイズ", ["コンパクト", "標準", "ワイド（全幅）"], index=0)
     target_occ = st.slider("目標稼働率", min_value=0.50, max_value=1.00, value=0.94, step=0.01)
     st.caption("※ Excelの計算ロジックをPythonに移植して計算します（Excel計算エンジンは使いません）。")
 
@@ -337,14 +242,17 @@ tab_sim, tab_fc = st.tabs(["94%シミュレーション", "固定費カバー率
 # 94% simulation (Main)
 # -------------------------
 with tab_sim:
-    cs = _chart_settings(graph_size)
     st.subheader("月次シミュレーション")
 
     colL, colR = st.columns([1.1, 1.2], gap="large")
     with colL:
         month = st.date_input("年月（その月のどの日でもOK）", value=date.today().replace(day=1))
         month_start = to_month_start(month)
+        month_days = days_in_month(month_start)
+        st.caption(f"実稼働日数: {month_days} 日（{month_start.strftime('%Y-%m')}）")
         beds = st.number_input("稼働病床数", min_value=0.0, value=401.0, step=1.0)
+        st.caption(f"入力値: {fmt_int(beds)} 床")
+
         los = st.number_input("平均在院日数", min_value=0.1, value=10.4, step=0.1)
 
 
@@ -414,7 +322,7 @@ with tab_sim:
                 unit_price = float(unit_price_raw)
                 st.info(f"入院単価（自動）: {unit_price_raw:,.2f} 円/人日（表示: {yen(unit_price_raw)}）")
         else:
-            unit_price = int_input_comma("入院単価（円/人日）", key="unit_price", default=85_911.0)
+            unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=85_911.0, step=100.0)
             st.caption(f"入力値: {yen(unit_price)} / 人日")
 
         if input_mode == "目標値だけ（実績不要）":
@@ -483,10 +391,8 @@ with tab_sim:
         },
         domain={"x": [0, 1], "y": [0, 1]},
     ))
-    cs = _chart_settings(graph_size)
-
-    fig_occ.update_layout(template="plotly_dark", width=cs["w_main"] if not cs["use_container"] else None, height=cs["h_occ"], margin=dict(l=8, r=8, t=32, b=8))
-    _plotly_center(fig_occ, cs["w_main"], cs["use_container"])
+    fig_occ.update_layout(template="plotly_dark", height=90, margin=dict(l=10, r=10, t=30, b=0))
+    st.plotly_chart(fig_occ, use_container_width=True)
 
     # -------------------------
     # 入院収入：実績（任意） vs 目標
@@ -513,8 +419,13 @@ with tab_sim:
         width=[0.35] * len(labels),
         marker_line_width=0,
     ))
-    fig_rev.update_layout(template="plotly_dark", width=cs["w_main"] if not cs["use_container"] else None, height=cs["h_bar"], yaxis_title="入院収入（円）", margin=dict(l=8, r=8, t=12, b=8))
-    _plotly_center(fig_rev, cs["w_main"], cs["use_container"])
+    fig_rev.update_layout(
+        template="plotly_dark",
+        height=220,
+        yaxis_title="入院収入（円）",
+        margin=dict(l=10, r=10, t=10, b=0),
+    )
+    st.plotly_chart(fig_rev, use_container_width=True)
 
     # -------------------------
     # 追加必要量（実績入力があるときだけ表示）
@@ -531,8 +442,8 @@ with tab_sim:
             width=0.42,
             marker_line_width=0,
         ))
-        fig_need.update_layout(template="plotly_dark", width=cs["w_main"] if not cs["use_container"] else None, height=cs["h_need"], margin=dict(l=8, r=8, t=8, b=8))
-        _plotly_center(fig_need, cs["w_main"], cs["use_container"])
+        fig_need.update_layout(template="plotly_dark", height=160, margin=dict(l=10, r=10, t=10, b=0))
+        st.plotly_chart(fig_need, use_container_width=True)
     else:
         st.caption("※ 実績（延べ患者数・新入院数）を入力すると、追加必要量のグラフが表示されます。")
 
@@ -583,7 +494,7 @@ with tab_fc:
             unit_price = (revenue_actual / patient_days_actual) if patient_days_actual else 0.0
             st.info(f"入院単価（自動）: {yen(unit_price)} / 人日")
         else:
-            unit_price = int_input_comma("入院単価（円/人日）", key="unit_price", default=86_546.0)
+            unit_price = st.number_input("入院単価（円/人日）", min_value=0.0, value=86_546.0, step=100.0, key="fc_unit_price")
 
         fixed_cost_month = st.number_input("固定費（月額・円）", min_value=0.0, value=0.0, step=1_000_000.0, key="fc_fixed")
         var_cost_rate = st.number_input("変動費率（0〜1）", min_value=0.0, max_value=1.0, value=0.325, step=0.005, key="fc_var")
@@ -669,8 +580,6 @@ with tab_fc:
                 dff["入院収入（目標稼働率）"] = (dff["最大延べ患者数（100%）"] * target_occ) * dff["入院単価（月次）"]
                 dff["増収額（目標−実績）"] = dff["入院収入（目標稼働率）"] - dff["入院収入（実績）"]
 
-                cs2 = _chart_settings(graph_size)
-
                 st.markdown("#### 月次推移（期間内）")
 
                 dff = dff.sort_values("年月").copy()
@@ -695,10 +604,14 @@ with tab_fc:
                     line=dict(dash="dash", width=2),
                     hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
                 ))
-                cs2 = _chart_settings(graph_size)
-
-                fig_occ_m.update_layout(template="plotly_dark", width=cs2["w_period"] if not cs2["use_container"] else None, height=cs2["h_line"], yaxis_title="稼働率（%）", margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                _plotly_center(fig_occ_m, cs2["w_period"], cs2["use_container"])
+                fig_occ_m.update_layout(
+                    template="plotly_dark",
+                    height=240,
+                    yaxis_title="稼働率（%）",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_occ_m, use_container_width=True)
 
                 # 入院収入（実績 vs 目標）
                 fig_rev_m = go.Figure()
@@ -718,8 +631,14 @@ with tab_fc:
                     marker=dict(size=6, color=occ_colors),
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
-                fig_rev_m.update_layout(template="plotly_dark", width=cs2["w_period"] if not cs2["use_container"] else None, height=cs2["h_line"] + 20, yaxis_title="入院収入（円）", margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                _plotly_center(fig_rev_m, cs2["w_period"], cs2["use_container"])
+                fig_rev_m.update_layout(
+                    template="plotly_dark",
+                    height=260,
+                    yaxis_title="入院収入（円）",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_rev_m, use_container_width=True)
 
                 # 増収額（棒）
                 fig_delta = go.Figure()
@@ -731,8 +650,13 @@ with tab_fc:
                     cliponaxis=False,
                     hovertemplate="%{x}<br>¥%{y:,.0f}<extra></extra>",
                 ))
-                fig_delta.update_layout(template="plotly_dark", width=cs2["w_period"] if not cs2["use_container"] else None, height=cs2["h_line"], yaxis_title="増収額（円）", margin=dict(l=8, r=8, t=10, b=8))
-                _plotly_center(fig_delta, cs2["w_period"], cs2["use_container"])
+                fig_delta.update_layout(
+                    template="plotly_dark",
+                    height=240,
+                    yaxis_title="増収額（円）",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_delta, use_container_width=True)
 
                 # 固定費カバー率（月次）
                 if fixed_cost_month and fixed_cost_month > 0:
@@ -753,8 +677,14 @@ with tab_fc:
                         marker=dict(size=6, color=occ_colors),
                         hovertemplate="%{x}<br>%{y:.2f}倍<extra></extra>",
                     ))
-                    fig_cov.update_layout(template="plotly_dark", width=cs2["w_period"] if not cs2["use_container"] else None, height=cs2["h_line"], yaxis_title="固定費カバー率（倍）", margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                    _plotly_center(fig_cov, cs2["w_period"], cs2["use_container"])
+                    fig_cov.update_layout(
+                        template="plotly_dark",
+                        height=240,
+                        yaxis_title="固定費カバー率（倍）",
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    st.plotly_chart(fig_cov, use_container_width=True)
 
 
                 s1, s2, s3, s4 = st.columns(4)
